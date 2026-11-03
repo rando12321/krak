@@ -8,3 +8,5 @@ Robô com teclado interno do jogo, tempos/direções convertidos das gravações
 - [ZIP atualizado](releases/DisneyClient-Follow-Teclado-Precisao.zip)
 
 32 verificações do SWF passaram e os 160.217 checkpoints foram preservados. A ponte Windows foi removida; o backend e o iniciador voltaram ao fluxo anterior. A física do servidor ainda precisa ser validada no jogo real.
+
+[Login público: aumentar limite e corrigir reconexão](DisneyClient-Completo/LOGIN-LIMITE-LEIA-ME.txt). A atualização do backend ainda precisa ser aplicada na VPS.

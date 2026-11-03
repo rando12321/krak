@@ -43,9 +43,11 @@ CREATE TABLE IF NOT EXISTS sessions (
  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
  expires_at DATETIME(6) NOT NULL,
  ip_address VARCHAR(45) NOT NULL,
+ device_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
  FOREIGN KEY (user_id) REFERENCES users(id),
  FOREIGN KEY (license_id) REFERENCES license_keys(id),
- INDEX (expires_at), INDEX (license_id), INDEX (user_id)
+ INDEX (expires_at), INDEX (license_id), INDEX (user_id),
+ INDEX sessions_device (user_id,license_id,device_hash,expires_at)
 ) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS audit_logs (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,

@@ -96,6 +96,11 @@ class Database:
                 if statement.strip():
                     await cur.execute(statement)
 
+            # CREATE IF NOT EXISTS does not upgrade existing installations.
+            await cur.execute("SHOW COLUMNS FROM sessions LIKE 'device_hash'")
+            if not await cur.fetchone():
+                await cur.execute("ALTER TABLE sessions ADD COLUMN device_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL, ADD INDEX sessions_device (user_id,license_id,device_hash,expires_at)")
+
     async def audit(self, action, user_id=None, ip=None):
         async with self.transaction() as cur:
             await cur.execute('INSERT INTO audit_logs(user_id,action,ip_address) VALUES(%s,%s,%s)', (user_id, action, ip))
@@ -137,6 +142,13 @@ class Database:
                     if dh not in devices and len(devices) >= row['max_activations']:
                         failure = 'activation limit exceeded'
                     else:
+                        # Legacy sessions can be attributed only when this key has
+                        # exactly one known activation; never guess with several.
+                        if len(devices) == 1 and devices[0] == dh:
+                            await cur.execute('UPDATE sessions SET device_hash=%s WHERE user_id=%s AND license_id=%s AND device_hash IS NULL', (dh, uid, row['id']))
+                        # A device moving between networks replaces its old IP-bound
+                        # sessions, without evicting other devices or other keys.
+                        await cur.execute('UPDATE sessions SET expires_at=%s WHERE user_id=%s AND license_id=%s AND device_hash=%s AND ip_address<>%s AND expires_at>UTC_TIMESTAMP(6)', (now, uid, row['id'], dh, ip))
                         # Repeated browser logins from one address are not new connections.
                         # Existing addresses may reconnect even when the address limit is full.
                         await cur.execute('SELECT COUNT(DISTINCT ip_address) AS n, MAX(ip_address=%s) AS same_ip FROM sessions WHERE user_id=%s AND expires_at>UTC_TIMESTAMP(6)', (ip, uid))
@@ -148,7 +160,7 @@ class Database:
                                 await cur.execute('INSERT INTO license_activations(license_id,device_hash) VALUES(%s,%s)', (row['id'], dh))
                             cookie, access = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
                             expiry = min(now + timedelta(hours=3), row['expires_at']) if row['expires_at'] else now + timedelta(hours=3)
-                            await cur.execute('INSERT INTO sessions(user_id,license_id,session_token_hash,access_token_hash,expires_at,ip_address) VALUES(%s,%s,%s,%s,%s,%s)', (uid, row['id'], digest(cookie), digest(access), expiry, ip))
+                            await cur.execute('INSERT INTO sessions(user_id,license_id,session_token_hash,access_token_hash,expires_at,ip_address,device_hash) VALUES(%s,%s,%s,%s,%s,%s,%s)', (uid, row['id'], digest(cookie), digest(access), expiry, ip, dh))
                             await cur.execute('UPDATE license_keys SET activated_at=COALESCE(activated_at,%s),last_used=%s WHERE id=%s', (now, now, row['id']))
                             await cur.execute('UPDATE users SET last_login=%s WHERE id=%s', (now, uid))
                             result = (cookie, access, row['level'])

@@ -1,0 +1,36 @@
+LOGIN PUBLICO: CONNECTION LIMIT EXCEEDED
+
+A mensagem e o limite de IPs simultaneos da conta, nao max_connections do MySQL.
+Para permitir ate 5 IPs, execute no banco usado pelo backend da VPS:
+
+UPDATE users
+SET connection_limit = 5
+WHERE username = 'NOME_DO_USUARIO';
+
+Substitua pelo nome exato da conta. Confira:
+
+SELECT username, connection_limit
+FROM users
+WHERE username = 'NOME_DO_USUARIO';
+
+Isso altera somente a conta escolhida e nao muda o limite de ativacoes da chave.
+
+Correcao de reconexao incluida:
+As sessoes novas recebem o hash do identificador de dispositivo ja utilizado na
+ativacao. Um login valido do mesmo dispositivo em outro IP expira suas sessoes
+anteriores naquela chave antes de contar os IPs ativos. Nao elimina sessoes de
+outros dispositivos nem de outras chaves.
+
+Em sessoes antigas sem esse campo, a associacao so ocorre se a chave tiver uma
+unica ativacao conhecida e ela corresponder ao dispositivo autenticado. Com
+varias ativacoes, nao presume que as sessoes sejam do mesmo dispositivo.
+
+Para aplicar a correcao ao site publico, atualize database.py e a migracao SQL
+no backend da VPS e reinicie o servico. O startup adiciona device_hash a tabelas
+sessions existentes quando necessario. O usuario do banco precisa poder ALTERAR
+essa tabela, assim como ja precisa criar as tabelas durante a inicializacao.
+Baixar o ZIP no computador nao altera o backend que ja esta rodando na VPS.
+
+18 testes locais passaram, usando o codigo real de autenticacao sobre fixture
+SQLite e um modelo das decisoes de migracao. Nao houve alteracao ou validacao
+contra o banco do site publico nesta sessao.

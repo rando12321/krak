@@ -21,7 +21,7 @@ class Store(Database):
   self.sql.executescript('''CREATE TABLE users(id INTEGER PRIMARY KEY,status TEXT,level TEXT,connection_limit INT,browser_access INT,last_login TEXT);
 CREATE TABLE license_keys(id INTEGER PRIMARY KEY,user_id INT,key_hash TEXT,status TEXT,expires_at TEXT,max_activations INT,activated_at TEXT,last_used TEXT);
 CREATE TABLE license_activations(license_id INT,device_hash TEXT);
-CREATE TABLE sessions(id INTEGER PRIMARY KEY,user_id INT,license_id INT,session_token_hash TEXT,access_token_hash TEXT,expires_at TEXT,ip_address TEXT);
+CREATE TABLE sessions(id INTEGER PRIMARY KEY,user_id INT,license_id INT,session_token_hash TEXT,access_token_hash TEXT,expires_at TEXT,ip_address TEXT,device_hash TEXT);
 CREATE TABLE audit_logs(user_id INT,action TEXT,ip_address TEXT);
 INSERT INTO users VALUES(1,'active','GOLD_II',2,1,NULL);
 ''')
@@ -32,9 +32,10 @@ INSERT INTO users VALUES(1,'active','GOLD_II',2,1,NULL);
  async def transaction(self):
   try:yield Cursor(self);self.sql.commit()
   except BaseException:self.sql.rollback();raise
- def seed(self,ip,lid=1,expired=False):
+ def seed(self,ip,lid=1,expired=False,device_hash="other-device"):
+  device_hash=digest(device_hash) if device_hash is not None else None
   expiry=utcnow()+timedelta(hours=-1 if expired else 1)
-  self.sql.execute('INSERT INTO sessions(user_id,license_id,expires_at,ip_address) VALUES(1,?,?,?)',(lid,str(expiry),ip));self.sql.commit()
+  self.sql.execute('INSERT INTO sessions(user_id,license_id,expires_at,ip_address,device_hash) VALUES(1,?,?,?,?)',(lid,str(expiry),ip,device_hash));self.sql.commit()
 class Tests(unittest.IsolatedAsyncioTestCase):
  def setUp(self):self.db=Store()
  def tearDown(self):self.db.sql.close()
@@ -73,4 +74,26 @@ class Tests(unittest.IsolatedAsyncioTestCase):
   self.db.seed('192.0.2.1')
   with self.assertRaisesRegex(ValueError,'License not found'):await admin.execute(argparse.Namespace(command='clear-key-sessions',id=999),self.db)
   self.assertEqual(self.db.sql.execute('SELECT COUNT(*) FROM sessions').fetchone()[0],1)
+ async def test_same_device_network_change_releases_old_ip_slot(self):
+  self.db.sql.execute('UPDATE users SET connection_limit=1');self.db.sql.commit()
+  await self.auth('192.0.2.1');await self.auth('192.0.2.2');await self.auth('192.0.2.3')
+  active=self.db.sql.execute('SELECT ip_address,device_hash FROM sessions WHERE expires_at>?',(str(utcnow()),)).fetchall()
+  self.assertEqual([(r[0],r[1]) for r in active],[('192.0.2.3',digest('test-device'))])
+ async def test_single_activation_legacy_sessions_reconnect_without_manual_reset(self):
+  self.db.sql.execute('UPDATE users SET connection_limit=1');self.db.sql.commit();self.db.seed('192.0.2.1',device_hash=None)
+  self.assertTrue(await self.auth('192.0.2.2'))
+  self.assertEqual(self.db.sql.execute('SELECT COUNT(*) FROM sessions WHERE expires_at>?',(str(utcnow()),)).fetchone()[0],1)
+ async def test_ambiguous_legacy_sessions_are_not_assumed_to_be_same_device(self):
+  self.db.sql.execute('INSERT INTO license_activations VALUES(1,?)',(digest('second-device'),));self.db.sql.execute('UPDATE license_keys SET max_activations=2 WHERE id=1');self.db.sql.commit()
+  self.db.seed('192.0.2.1',device_hash=None);self.db.seed('192.0.2.2',device_hash=None)
+  with self.assertRaisesRegex(AuthError,'connection limit exceeded'):await self.auth('192.0.2.3')
+  self.assertEqual(self.db.sql.execute('SELECT COUNT(*) FROM sessions WHERE device_hash IS NOT NULL').fetchone()[0],0)
+ async def test_reconnection_does_not_expire_other_keys(self):
+  self.db.sql.execute('UPDATE users SET connection_limit=1');self.db.sql.commit();self.db.seed('192.0.2.1',lid=2,device_hash=None)
+  with self.assertRaisesRegex(AuthError,'connection limit exceeded'):await self.auth('192.0.2.2')
+  self.assertEqual(self.db.sql.execute('SELECT COUNT(*) FROM sessions WHERE expires_at>?',(str(utcnow()),)).fetchone()[0],1)
+ async def test_activation_denial_does_not_expire_existing_sessions(self):
+  await self.auth('192.0.2.1')
+  with self.assertRaisesRegex(AuthError,'activation limit exceeded'):await self.db.authenticate('test-key-1','unrecognized-device','192.0.2.2')
+  self.assertEqual(self.db.sql.execute('SELECT COUNT(*) FROM sessions WHERE expires_at>?',(str(utcnow()),)).fetchone()[0],1)
 if __name__=='__main__':unittest.main()

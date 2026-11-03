@@ -9,7 +9,7 @@
   "DESEMPENHO-LEIA-ME.txt": "c21fb5ec2b39801b04c9ba9552eb93b1de69c4123907c9e0d9ce5e208d4479ca",
   "DIAGNOSTICO-AUTOPLAY-LEIA-ME.txt": "e78109f0f9de43009e8634133836791b6a3621c45c400eafc6e176285c49f8b0",
   "DisneyClient/.env.example": "665263019972bc7ad67e9298b6be109fc9798fd562250c3e15207a8f11282acb",
-  "DisneyClient/BUILD-ID.txt": "13313c607ca6df9e6165d2e87392b4d0bd29b5b58995c0d9830cd3e5ca7c8202",
+  "DisneyClient/BUILD-ID.txt": "2ce49e82c4fa360d889c652e30c266f09827b13fd402e0bee3e4aaf068118a1a",
   "DisneyClient/admin.py": "0ba71c51d6a2c49c9c2b04c668f505bf7f686d85d495f9e5af668c02a7d685f1",
   "DisneyClient/api/__init__.py": "65f4ca36bce69998b3522c46a789a7a3692b452aa7881a3b93dfc50294992d11",
   "DisneyClient/api/auth.py": "84520387295491ad5242742bcbeb0fc68d12cffb9e4a5f289b090f1e9c255eb5",
@@ -32,7 +32,7 @@
   "DisneyClient/data/mariadbutils.py": "79c53d2a2c9babdc00dd147686d918f73925535a88e4e205253becf019d71c5d",
   "DisneyClient/data/soft.py": "dd9bf3428cd5d90587561058975750a9abc9ac4113df9dcf10ae1259bd1ac9f1",
   "DisneyClient/data/user.py": "dfe83adc663b6b450ef530ee492a8c56ae9620ea8deb2ccd8488e9cdd4a228fb",
-  "DisneyClient/database.py": "365e5ad8fe25dab0165930b17bf156686f306cbb55ed13e73ed6ddef6c2edee5",
+  "DisneyClient/database.py": "04b15681a1c13ef9f6847fcb5158050a99daf7eeeccc7cef6ee6531e4676013c",
   "DisneyClient/images/ai.png": "6f8b792f3a907343152bc38983302c1741afb6b65c785ed99db7f896538d6f8c",
   "DisneyClient/images/background.png": "c8f9ff59648f3494b4a7ed2f5a8ebc94314409a603dca97a11a22b643c286ff1",
   "DisneyClient/images/bot.png": "d7310682cd3807653f326114ce534acf2e270a084399b25cb1248c0049adfe5c",
@@ -63,7 +63,7 @@
   "DisneyClient/images/new.png": "5edb331c1758b0c6dcbe0f6bec792de64c67c697af307983bc78f45f39b49dda",
   "DisneyClient/images/settings.png": "cd41e6d63b09f83afc154cffb3f22660145d6574a283317cf845c441463de063",
   "DisneyClient/infrastructure/__init__.py": "08691355299dff883c62ddad67b8fcc1a2201601642e09dcd437e8aedb58fba3",
-  "DisneyClient/migrations/001_initial.sql": "8e49d73862ecc81fd2b62a8c034308df7b1bd7bf6501c1008f33f5d07ef3cf12",
+  "DisneyClient/migrations/001_initial.sql": "e9b586a242c6b02af8285ab652a24b68cabdaae278984383c70972d98835ff83",
   "DisneyClient/native_wj.py": "0a0570dff6c8e34cb8d38f84a3790a6008b2b4cb5e2bef3d9561629bf49ecf4d",
   "DisneyClient/public/ChargeurTransformice.swf": "5afd473035248f9484cc51bece6530a92238ed06827d592ca43cd163c3e850c6",
   "DisneyClient/public/background.css": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
@@ -139,6 +139,7 @@
   "LEIA-ME-COMPLETO.txt": "0dfb343d02947e9f86c33dabfa19f842ce00a5d76d12816b9000ec5d2e4e7bc3",
   "LEIA-ME-CORRECAO.txt": "3600f0e28894f22c317aa686e1934376e05afb79bf651c18fe4455395a14ab62",
   "LEIA-ME-PRIMEIRO.txt": "a31d97f971906ae41059ba40fe298b589891c40eb0addf832e6146b7a07630ca",
+  "LOGIN-LIMITE-LEIA-ME.txt": "8a4b0016dfe172ef65a166babf15d7fca22f2259f7b645f71f1349a5299897e0",
   "NICK-TITULO.txt": "fd379262a78a16eb2a8cac1fc434448b63d487c452e2db2e41283b03961a2273",
   "OPCOES-JOGADOR-LEIA-ME.txt": "66dffa69b58c886768e63c908c4c01eef03d6b4d5f652553ab266f5b2621d97b",
   "PRECISAO-TECLADO-LEIA-ME.txt": "becb03000c675bef470288f482efb9ed05ce84f1cc4a211dbc701d33ae630764",
@@ -351,5 +352,6 @@
   "iniciar_client.py": "d9c9a92ba1a110df932616103f72c8158b23d42db1ccc89d8c3fbbe21d68bcb2",
   "logs/log.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "rotas_teclado_convertidas.json": "a4958c6275cdcd21c7886f6e2c33e980f5eae10cf92beafae93585066ef5f1fc",
-  "testes-auth/test_sessions.py": "ddc43a1dd7de76be98299aef614f71eb387737162c1a1f12622a1e648817d971"
+  "testes-auth/test_migration.py": "981f18e38a1fde31469c0e8e410423a718d423f84ef7e0b4f3e8b1ab4fef02ad",
+  "testes-auth/test_sessions.py": "2f62c0087df04a17bc9c5dc0d4e7065a3174f643b114e15f3867986b6a2cda0a"
 }
