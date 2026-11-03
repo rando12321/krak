@@ -1,0 +1,11 @@
+{
+  "version": 13,
+  "coordinate_reference": "user-uploaded DisneyClient-Completo-SDDS-Follow-v3.zip",
+  "position_source": "target display coordinates converted between parents",
+  "physics_scale": 30,
+  "update": "every frame and incoming movement callback",
+  "functional_checks_passed": 27,
+  "runtime": "Ruffle 0.7.1",
+  "public_origin": "http://207.180.3.127:8080/",
+  "live_server_tested": false
+}

@@ -1,0 +1,21 @@
+{
+  "discord_admins": [],
+  "discord_names": [],
+  "discord_log_channel": 0,
+  "discord_log_channel2": 0,
+  "discord_priv_channel": 0,
+  "discord_priv_channel2": 0,
+  "discord_major_role_id": 0,
+  "map_storage_fetch": true,
+  "client_version": "1.7",
+  "standalone_url": "",
+  "update_url": "",
+  "version": "1.7",
+  "soft_forbidden_keys": [],
+  "storage_allowed_levels": [
+    "SILVER",
+    "GOLD",
+    "GOLD_II",
+    "PLATINUM"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "version": 9,
+  "base": "user supplied functional v8",
+  "runtime": "Ruffle 0.7.1",
+  "compiler": "FFDec 26.4.0",
+  "functional_checks_passed": 34,
+  "existing_methods_changed": [
+    "swf_loaded",
+    "handle_packet"
+  ],
+  "continuous_position_writes": false,
+  "velocity_writes": false,
+  "live_latency_measured": false
+}

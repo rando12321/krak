@@ -1,0 +1,13 @@
+AJUSTES — L3V3, AUTO EMOJI E MACRO
+
+L3v3 mode: clique no seletor "banho" para escolher entre os 14 visuais; a lista abre no palco, acima do recorte do painel. A bolinha ativa/desativa o visual selecionado. E um visual local e nao altera peso/massa. Desligar restaura a imagem original. Falhas de carregamento aparecem no status de Ajustes.
+
+Auto emoji: campo de numero editavel (0-9). Digite o ID desejado e ative a bolinha. Envia pelo emissor nativo imediatamente e repete a cada 3 segundos enquanto o jogador estiver vivo. Numero vazio nao envia. Desativar interrompe a repeticao; o intervalo nativo antigo e cancelado para evitar duplicacao. Respostas do servidor real ainda precisam ser verificadas.
+
+Macro: ative a bolinha ou CTRL+F8 e segure seta para cima ou W. O campo agora representa INTERVALO EM MILISSEGUNDOS, padrao 100; valores aceitos 20-2000. Cada pulso chama a rotina nativa de pulo com false e depois true, uma vez por intervalo. A rotina antiga de muitos KEY_DOWN no mesmo quadro fica desligada. Soltar as teclas, desativar a macro, morrer, editar texto ou perder foco pausa/libera o pulo. A taxa de quadros limita a frequencia efetiva. Nao e macro de movimento automatico sem segurar a tecla.
+
+Instalacao: feche completamente Adobe e iniciador, substitua os arquivos preservando DisneyClient/.env, reinicie INICIAR_CLIENT.bat e gere uma URL nova. Follow, IP 207.180.3.127, opcoes originais do Jogador, rolagem e correcao de sessoes da key foram preservados.
+
+Verificacao: 28 testes simulados AVM2 no Ruffle 0.7.1. Incluem seletor de 14 visuais fora do recorte, carregamento real do PNG banho e restauracao, campo de emoji editavel, ID correto, repeticao/intervalo/desligamento, macro com tecla mantida, edicao do intervalo, pausas por texto/morte, CTRL+F8 e ausencia de duplicacao dos controles. Bytecode de metodos preexistentes preservado exceto pelo hook inicial de SettingsControls. Ainda falta confirmar no Adobe e servidor real. Nenhuma implantacao na VPS foi feita.
+
+Fontes atuais em fontes-ajustes/. BuildScrollFixture pode montar SettingsTests.as como fixture de testes. A SWF de fixture nunca deve substituir a de producao.

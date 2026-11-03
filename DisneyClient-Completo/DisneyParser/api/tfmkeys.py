@@ -1,0 +1,69 @@
+# Python / tfmkeys.py / Python 3.11 / DisneyParser
+
+
+
+
+#                https://safemarket.xyz | https://safemarket.xyz/discord
+#__| |_____________________________________________________________________________| |__
+#__   _____________________________________________________________________________   __
+#  | |                                                                             | |  
+#  | | ____     _     _____  _____      __  __     _     ____   _  __ _____  _____ | |  
+#  | |/ ___|   / \   |  ___|| ____|    |  \/  |   / \   |  _ \ | |/ /| ____||_   _|| |  
+#  | |\___ \  / _ \  | |_   |  _|      | |\/| |  / _ \  | |_) || ' / |  _|    | |  | |  
+#  | | ___) |/ ___ \ |  _|  | |___     | |  | | / ___ \ |  _ < | . \ | |___   | |  | |  
+#  | ||____//_/   \_\|_|    |_____|    |_|  |_|/_/   \_\|_| \_\|_|\_\|_____|  |_|  | |  
+#__| |_____________________________________________________________________________| |__
+#__   _____________________________________________________________________________   __
+#  | |                                                                             | |  
+#                               https://github.com/Jodis974                           
+
+
+
+from aiohttp import web
+from main import endpoint
+
+import api
+
+class TfmKeys(web.View):
+	async def get(self):
+		response = {}
+		status = 401
+
+		if (auth := self.request.headers.get("Authorization")) is not None:
+			if (token := endpoint.authentication(auth)) is not None:
+				if token in api.tokens:
+					if api.parser.ready:
+						response.update(api.parser.fetched)
+						status = 200
+					else:
+						response["error"] = "Game SWF not ready or unsupported"
+						status = 503
+				else:
+					response["error"] = "unauthorized token"
+			else:
+				response["error"] = "invalid credentials"
+				status = 400
+		else:
+			response["error"] = "invalid credentials"
+			status = 400
+
+		return web.json_response(response, status=status)
+
+
+
+#                https://safemarket.xyz | https://safemarket.xyz/discord
+#__| |_____________________________________________________________________________| |__
+#__   _____________________________________________________________________________   __
+#  | |                                                                             | |  
+#  | | ____     _     _____  _____      __  __     _     ____   _  __ _____  _____ | |  
+#  | |/ ___|   / \   |  ___|| ____|    |  \/  |   / \   |  _ \ | |/ /| ____||_   _|| |  
+#  | |\___ \  / _ \  | |_   |  _|      | |\/| |  / _ \  | |_) || ' / |  _|    | |  | |  
+#  | | ___) |/ ___ \ |  _|  | |___     | |  | | / ___ \ |  _ < | . \ | |___   | |  | |  
+#  | ||____//_/   \_\|_|    |_____|    |_|  |_|/_/   \_\|_| \_\|_|\_\|_____|  |_|  | |  
+#__| |_____________________________________________________________________________| |__
+#__   _____________________________________________________________________________   __
+#  | |                                                                             | |  
+#                               https://github.com/Jodis974                           
+
+
+

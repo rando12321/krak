@@ -1,0 +1,11 @@
+CORRECAO DAS OPCOES DESAPARECIDAS NA ABA JOGADOR
+
+Causa encontrada no controlador de desempenho: ao aposentar as linhas antigas de peso/velocidade, a rotina subia ate o filho direto da secao Jogador. Na interface nativa esse filho pode ser o conteiner compartilhado de todas as linhas. A remocao podia apagar pulo alto e outras opcoes, deixando somente os novos controles de FPS e nenhum conteudo para rolar.
+
+PerformanceControlsV2 localiza somente a linha nativa correspondente, preserva seu conteiner e as demais linhas/callbacks. Os controles de FPS sao acrescentados apos as opcoes nativas. A rolagem v2 permanece pela roda do mouse, com barra antiga oculta. Pulo alto usa o controle original da interface, sem recriar uma funcao ficticia ou alterar as permissoes da key. As linhas de peso/velocidade que ja eram aposentadas nessa base continuam aposentadas.
+
+Instalacao: feche completamente o Adobe e o iniciador. Substitua os arquivos preservando DisneyClient/.env. Reinicie INICIAR_CLIENT.bat e gere uma URL nova. O menu precisa ser criado de novo: uma janela antiga ja perdeu as linhas e nao as reconstruira so ao fechar/reabrir o menu. Follow v13, IP 207.180.3.127 e correcao de sessoes da key mantidos.
+
+Verificacao: 32 testes simulados AVM2 no Ruffle 0.7.1, incluindo regressoes com conteiner compartilhado, linha de pulo alto preservada e clicavel, ultima opcao preservada e rolagem integrada com as opcoes originais. Verificacao de bytecode confirma apenas a substituicao do hook de desempenho entre os metodos existentes. Ainda falta confirmar no Adobe/servidor real. Nao houve implantacao na VPS.
+
+Fontes: fontes-desempenho/PerformanceControlsV2.as, PatchPerformanceV2.java e PerformanceTestsV2.as. PatchPerformanceV2 recebe a SWF do pacote imediatamente anterior (rolagem v2). Os testes preservam as rotinas existentes de FPS e ping.

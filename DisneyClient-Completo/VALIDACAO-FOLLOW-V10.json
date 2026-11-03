@@ -1,0 +1,13 @@
+{
+  "version": 10,
+  "functional_checks_passed": 45,
+  "runtime": "Ruffle 0.7.1",
+  "compiler": "FFDec 26.4.0",
+  "drift_threshold_pixels": 24,
+  "persistence_ms": 120,
+  "correction_step_pixels_approx": 24,
+  "correction_cooldown_ms": 400,
+  "max_packet_age_ms": 250,
+  "velocity_writes": false,
+  "live_server_tested": false
+}

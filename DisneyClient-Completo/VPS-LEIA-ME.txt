@@ -1,0 +1,10 @@
+VPS 207.180.3.127 — FOLLOW V10
+
+Endereco publico: http://207.180.3.127:8080
+O iniciador abre esse endereco; a SWF usa esse backend para acesso remoto. O servidor escuta em 0.0.0.0:8080. Banco de dados, parser e health checks continuam locais (127.0.0.1).
+
+Feche o Flash e o iniciador anterior. Substitua os arquivos do pacote, preserve DisneyClient/.env, confira SERVER_HOST=0.0.0.0 e SERVER_PORT=8080 no .env existente e abra INICIAR_CLIENT.bat. O iniciador usa 0.0.0.0; a configuracao no .env tambem e necessaria caso execute server.py diretamente. Gere uma URL nova e abra no Adobe.
+
+Para acesso remoto, a porta TCP 8080 precisa estar permitida no firewall da VPS e nas regras do provedor. Nenhuma regra de firewall foi alterada nem houve implantacao na VPS.
+
+Validacao: sintaxe Python do iniciador/backend; verificacao FFDec confirma somente a troca do endereco antigo do Heroku por http://207.180.3.127:8080/, com bytecode de todos os metodos intacto. O follow v10 nao foi alterado. Disponibilidade real da VPS nao foi testada.

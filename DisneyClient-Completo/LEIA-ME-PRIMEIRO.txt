@@ -1,0 +1,23 @@
+VERSAO ATUAL: Autoplay por teclado interno do SWF.
+Leia TECLADO-SWF-LEIA-ME.txt. O texto abaixo descreve versoes anteriores.
+
+VERSAO ATUAL: Autoplay por teclado interno do SWF.
+Leia TECLADO-SWF-LEIA-ME.txt. O texto abaixo descreve versoes anteriores.
+
+VERSAO ATUAL: Autoplay por teclado interno do SWF.
+Leia TECLADO-SWF-LEIA-ME.txt. O texto abaixo descreve versoes anteriores.
+
+VPS: abra http://207.180.3.127:8080. Consulte VPS-LEIA-ME.txt para atualizar o pacote e preservar o .env.
+
+SDDS MENU - FOLLOW V8 - FISICA NORMAL
+
+Feche o Flash e o iniciador anterior. Extraia este ZIP completo em uma pasta nova e abra INICIAR_CLIENT.bat.
+No chat: /follow Nome#0000. Para parar: /follow off ou Esc.
+
+V8: margem para reagir a distancia reduzida de 18 para 4 pixels. Perto do alvo, o movimento usa os indicadores nativos de esquerda/direita para reagir sem esperar abrir distancia. Inverter a direcao libera a tecla anterior antes de apertar a oposta. Mantem a fisica normal e nao altera velocidade vertical. A latencia da rede e o intervalo das atualizacoes do servidor continuam existindo; nao ha garantia de atraso zero. V7: o parser agora deriva is_jumping do metodo nativo jump(Boolean, int), validando o campo Boolean escrito e testado nos dois estados. Nao usa velocidade vertical nem deslocamento para adivinhar pulo. A tecla e enviada uma vez na mudanca para ligado e liberada ao desligar, sem repeticao por quadro. Feche o parser anterior e extraia em uma pasta nova para recalcular os simbolos. V6: removida a verificacao de player_clip no alvo remoto. Esse campo identifica o rato local, nao indica se outro jogador esta vivo ou ativo. O teste inclui alvo remoto com campo false. Esta versao remove a copia continua de posicao e de velocidade. Apos o teleport inicial, o client apenas aciona os controles de movimento normais em direcao ao alvo. Nao modifica a velocidade vertical nem reposiciona a cada quadro.
+O teleport inicial acontece uma vez por comando ou rodada/renascimento. Abrir o chat, alternar a janela ou reencontrar o alvo na mesma rodada nao repete o teleport.
+Quando o alvo fica morto ou e removido da lista/mapa, os controles sao liberados. A entrada na toca precisa ser conferida no jogo real; nao se usa mais o campo de jogador local para inferir esse estado. O Follow nao envia comandos de morte ou vitoria para copiar a entrada na toca.
+Pulo so e acionado se um campo booleano real do alvo for identificado. Sem esse simbolo, o HUD informa que o pulo esta indisponivel: esta versao nao garante copiar escaladas ou concluir mapas com obstaculos.
+Digite com o chat aberto para pausar; fechar o chat retoma. Perder foco pausa e retornar retoma.
+
+Validacao: 26 testes AVM2 e 5 testes de extracao/integracao do parser em Ruffle e verificacao estrutural. A ausencia de DC e o comportamento no Adobe_10.exe com servidor real precisam ser verificados. O teleport inicial ainda pode ser rejeitado pelo servidor; esta versao nao impede o servidor de fechar a conexao.

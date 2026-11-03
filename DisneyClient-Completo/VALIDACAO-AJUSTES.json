@@ -1,0 +1,18 @@
+{
+  "checks_passed": 28,
+  "runtime": "Ruffle 0.7.1",
+  "skin_asset_loaded": "l3v3banho.png",
+  "emoji_editable_range": [
+    0,
+    9
+  ],
+  "macro_interval_ms": [
+    20,
+    2000
+  ],
+  "macro_requires_held_key": true,
+  "existing_methods_changed": [
+    "swf_loaded"
+  ],
+  "live_adobe_server_tested": false
+}

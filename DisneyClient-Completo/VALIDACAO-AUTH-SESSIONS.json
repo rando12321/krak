@@ -1,0 +1,7 @@
+{
+  "auth_tests_passed": 10,
+  "sql_fixture_adapter": "SQLite",
+  "mysql_mariadb_live_tested": false,
+  "production_sessions_changed": false,
+  "follow_swf_unchanged": true
+}

@@ -1,0 +1,32 @@
+CORRECAO PONTUAL PARA O ZIP ENVIADO
+
+COMO APLICAR
+1. Feche o Adobe Flash e a janela INICIAR_CLIENT anteriores. O MySQL/XAMPP pode continuar ligado.
+2. Extraia o conteudo deste ZIP na pasta atual do projeto, ao lado de INICIAR_CLIENT.bat. Mantenha a subpasta correcao-fisica junto dos dois arquivos APLICAR_CORRECAO.bat e aplicar_correcao.py.
+3. Abra APLICAR_CORRECAO.bat. Ele verifica a versao, cria backup, aplica seis arquivos e abre seu iniciador normal.
+Se voce extrair em uma subpasta, o instalador tambem procura o projeto na pasta imediatamente acima. Outra opcao e arrastar seu INICIAR_CLIENT.bat sobre APLICAR_CORRECAO.bat.
+
+A verificacao exige a mesma base que voce enviou. Se algum arquivo for de outra atualizacao, o instalador para antes de alterar o projeto. Configuracao, keys, banco, tokens, a pasta de ambiente Python e o visual do menu nao sao substituidos.
+
+O QUE FOI ENCONTRADO
+Na SWF que veio com o projeto, o parser antigo liberava 123 simbolos, mas faltavam os dois campos de direcao e o getter nativo de velocidade. A opcao de velocidade tentava usar campos ausentes, compativel com o erro 1069 registrado.
+A opcao Reduzir massa chamava uma rotina nativa de movimento com o valor informado. Essa rotina nao ajusta a massa do corpo; ela modifica o movimento horizontal. A nova rotina resolve o metodo nativo de massa e inercia pela estrutura da SWF.
+
+COMPORTAMENTO DA CORRECAO
+O menu e seus nomes/atalhos permanecem iguais. Reduzir massa continua em porcentagem: valor 2 passa a significar 2% a menos de massa e inercia, calculado a partir do corpo original, sem acumular reducao a cada frame. Valores negativos ou iguais/superiores a 100 sao rejeitados; valores com virgula tambem sao aceitos.
+Ao desligar, a massa e restaurada. Se o proprio jogo ja tiver trocado a massa, como durante uma mudanca de estado, a rotina preserva essa mudanca em vez de sobrescreve-la com um valor antigo.
+Velocidade passa a usar o getter nativo validado. Falhas de simbolos ou valores invalidos desligam somente a opcao afetada e aparecem no diagnostico.
+Ao pegar queijo ou sair da rodada, as alteracoes de fisica sao suspensas e a massa modificada e restaurada quando aplicavel. As caixas podem continuar marcadas: os efeitos retomam quando houver um rato vivo sem queijo. Essa suspensao e intencional para deixar a finalizacao da rodada a cargo do jogo.
+Nenhum pacote de toca, morte ou vitoria e criado pela correcao. Os leitores de conexao e temporizadores originais continuam preservados.
+
+COMO TESTAR
+Entre numa sala, mantendo as outras opcoes desligadas. Teste primeiro somente Reduzir massa com valor 2, pegue queijo e tente concluir. Depois teste velocidade separadamente. Se ainda houver DC ou morte na toca, envie logs-client/flash-diagnostics.jsonl gerado por esta versao.
+O log novo diferencia falhas locais, ativacao/restauracao/suspensao de fisica e saida da rodada com ou sem queijo. Sair da rodada com queijo nao e registrado como prova de morte: pode ser uma vitoria normal. O motivo exato do encerramento pelo servidor ainda depende do teste real.
+
+BACKUP
+O instalador imprime o nome de backup-fisica-... na pasta do projeto. Para voltar: feche o Flash e o iniciador, copie as pastas DisneyClient e DisneyParser desse backup para a pasta do projeto, substitua os arquivos e abra INICIAR_CLIENT.bat. Os dois novos modulos de parser podem permanecer: a versao antiga nao os importa.
+
+VALIDACAO
+23 verificacoes do codigo ActionScript real em Ruffle, com objetos de fisica simulados; dois testes de extracao cobrindo a SWF enviada e duas referencias; cinco testes do endpoint de diagnostico; quatro testes de backup, idempotencia, rejeicao de versao e rollback do instalador.
+O parser integrado resolveu 135 simbolos na SWF enviada. O bytecode confirma que somente swf_loaded e loop_game mudaram entre os metodos anteriores, mais a classe PhysicsGuard adicionada. Os outros metodos, inclusive os do menu, permanecem identicos.
+Nao houve teste no Adobe_10.exe/Windows nem contra o servidor oficial. A correcao elimina os erros identificados no cliente, mas nao garante que o servidor aceite fisica modificada nem comprova que a morte na toca esteja resolvida.

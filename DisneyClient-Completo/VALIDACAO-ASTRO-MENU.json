@@ -1,0 +1,9 @@
+{
+  "checks_passed": 48,
+  "runtime": "Ruffle 0.7.1",
+  "button_label": "Menu",
+  "top_title": "ASTRO MENU",
+  "alignment_positions_tested": 9,
+  "center_reselection_tested": true,
+  "live_adobe_tested": false
+}

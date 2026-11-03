@@ -1,0 +1,23 @@
+WJ FLY E BOAS-VINDAS
+
+O chat local exibe BEM VINDO AO SDDS CHEATS, em azul claro, uma vez quando o jogador estiver carregado. A mensagem nao e enviada ao chat publico da sala.
+
+WJ FLY
+1. Inicie INICIAR_CLIENT.bat deste pacote, use sua key no localhost e abra a URL no Adobe_10.exe, como antes.
+2. Entre no mapa e abra Menu Disney > Jogador. Role ate o final das opcoes para encontrar WJ Fly [AoB].
+3. Clique para ativar. O status informa quando a assinatura unica for encontrada ou explica a falha. Se ainda nao houver correspondencia, mova/pule no mapa e tente novamente, pois o codigo do Flash pode ser gerado somente quando utilizado.
+4. Clique novamente para desligar e restaurar o byte original.
+
+A assinatura e exatamente a fornecida:
+F3 0F 7E 40 ?? 66 0F D6 45 ?? 8D ?? ?? ?? ?? ?? 8D ?? ?? ?? ?? ?? ?? ?? F3 0F 7E 4D ?? 8B ?? 8B ?? ?? 8B ?? ?? 85 ?? 0F 84
+ON: F3 0F 7E 45
+O componente troca somente o quarto byte, de 40 para 45. Os demais bytes, incluindo o deslocamento desconhecido, sao preservados. O byte original e guardado para restauracao; nao se usa um OFF adivinhado.
+
+O componente aceita somente Adobe_10.exe x86 no Windows. Ele prefere a janela do Adobe_10.exe que estiver em primeiro plano. Se houver uma unica instancia, usa essa; se houver varias sem uma selecionada, informa o conflito. O menu apenas solicita a operacao ao backend local autenticado; os bytes x86 nao sao inseridos na SWF.
+A ativacao exige correspondencia unica em memoria executavel e leitura completa das regioes examinadas. Nao ha escrita se a assinatura estiver ausente ou duplicada. Antes de restaurar, o componente verifica a identidade da instancia e os bytes atuais. Se o codigo mudou, informa o problema sem sobrescrever outro codigo.
+Ao encerrar normalmente o backend, ele tenta restaurar o patch. Desative WJ Fly antes de fechar o iniciador; um encerramento forcado do backend nao executa a restauracao. Fechar o Adobe_10.exe descarta a memoria modificada.
+
+VALIDACAO E LIMITES
+Nove testes do mecanismo verificam ativacao, restauracao de um byte, assinatura ausente/duplicada, fronteira de blocos, conflito de sessao, reutilizacao de PID, leitura incompleta e limpeza. Seis testes da API verificam autenticacao, acesso local, formato e mensagens de erro.
+As chamadas Win32 e o efeito do AoB no Adobe_10.exe real ainda nao foram executados neste ambiente Linux. O fornecimento da assinatura nao confirma sua compatibilidade com o codigo gerado na sua sessao. O status mostra o resultado da busca e da escrita, nao uma garantia de funcionamento do movimento.
+O Autoplay adaptado e a correcao de rede estao incluidos. Consulte AUTOPLAY-LEIA-ME.txt.

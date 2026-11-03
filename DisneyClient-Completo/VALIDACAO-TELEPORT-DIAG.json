@@ -1,0 +1,10 @@
+{
+  "build_id": "sdds-legacy-teleport-codec-v5",
+  "actual_native_packet_constructor_checks": 37,
+  "controls_regression_checks": 29,
+  "backend_tests": 9,
+  "telemetry_http_verified": true,
+  "old_position_encoding_error_reproduced": true,
+  "official_server_tested": false,
+  "disconnect_cause_confirmed": false
+}

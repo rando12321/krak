@@ -1,0 +1,22 @@
+TELEPORT V5 - CORRECAO DO FORMATO DE COORDENADAS
+
+Os logs confirmaram F registrado com destino (279,99), seguido de rato em (-15,15) apos 200ms. A rotina antiga escrevia coordenadas como shorts de 16 bits, mas o leitor nativo usa inteiros assinados de tamanho variavel (SLEB128).
+A reproducao com o construtor de pacote da propria SWF recebida interpretou o formato antigo como (1,23), com os bytes restantes entrando nos campos seguintes.
+Esta versao codifica x/y, flags e velocidades no formato esperado pelo leitor nativo. O evento local de movimento continua sendo processado pelo manipulador do jogo, sem escrever diretamente no corpo fisico.
+O valor zero e reservado pelo manipulador nativo para manter um eixo: o destino zero usa o pixel vizinho 1.
+
+INSTALACAO
+Feche o Adobe Flash e o iniciador. Extraia TODO o ZIP em uma pasta nova e execute INICIAR_CLIENT.bat. Reinicie o backend junto, pois o build e o esquema de diagnostico foram atualizados.
+Ative Teleport na aba Farm. Saia de campos de texto clicando no mapa e pressione F com o cursor no destino.
+
+DIAGNOSTICO
+Registros com event=teleport e build=sdds-legacy-teleport-codec-v5 continuam em logs-client/flash-diagnostics.jsonl.
+requested registra o destino; returned apenas indica retorno da chamada local; after_200ms mostra a posicao visual depois de 200ms. Nenhum desses eventos e uma confirmacao do servidor.
+Os logs desta correcao nao incluem senha, token, chat ou conteudo de pacotes.
+Se a posicao continuar errada ou houver DC, envie um novo logs-client.zip desta versao.
+
+VALIDACAO
+37 verificacoes usando o construtor REAL de pacote da SWF recebida, incluindo reproducao do erro anterior, destinos dos logs, numeros negativos, limites, campos de velocidade e fronteira exata do pacote.
+29 verificacoes de controles, atalhos e funcoes antigas no Ruffle, envio HTTP de diagnostico e nove testes do backend.
+Ainda nao testado no Adobe Flash real ou no servidor oficial. Corrigir este erro de codificacao nao comprova a causa do DC.
+Os testes NativeFormatTests exigem a SWF original local; ela e seus logs nao estao publicados neste pacote.

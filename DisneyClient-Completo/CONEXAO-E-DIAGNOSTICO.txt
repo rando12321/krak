@@ -1,0 +1,25 @@
+CORRECAO DE REDE E DIAGNOSTICO DO DC
+
+Feche o Adobe Flash Player e a janela INICIAR_CLIENT anteriores. Extraia este ZIP inteiro em uma pasta nova e abra somente INICIAR_CLIENT.bat. O MySQL/XAMPP precisa estar ligado. Use a key no localhost e abra a URL gerada no Flash como antes.
+O iniciador verifica a identificacao da versao no backend e avisa se uma instalacao antiga ainda ocupa a porta, evitando carregar por engano o loader anterior.
+
+MUDANCAS CONCRETAS
+O loop legado removia os leitores SOCKET_DATA do jogo e instalava um decodificador antigo. Tambem alterava contadores e parava um timer interno a cada frame. O parser atual nao resolve todos os campos usados por esse codigo. Esses caminhos foram identificados como candidatos a falhas de leitura, verificacao e desconexao.
+Esta versao preserva os leitores e os timers originais do jogo, em vez de usar esses dois trechos antigos. O loop das opcoes fica envolvido por um tratador que registra falhas locais sem interromper a propagacao normal dos eventos do jogo.
+O Autoplay por rotas foi adaptado nesta edicao: consulte AUTOPLAY-LEIA-ME.txt. A gravacao por pacotes e o PREVIEW antigos ainda precisam ser adaptados. Outras opcoes podem continuar sendo rejeitadas pelo servidor; esta alteracao nao comprova compatibilidade dessas funcoes.
+O texto amarelo Sdds CHEATS start e o visual novo do menu permanecem integrados.
+
+DIAGNOSTICO
+A barra inferior indica que a rede original e o diagnostico estao ativos. Quando os sockets puderem ser identificados em runtime, listeners passivos registram CLOSE, IO_ERROR e SECURITY_ERROR sem ler ou consumir dados da conexao.
+Os eventos locais sao salvos em logs-client/flash-diagnostics.jsonl. O arquivo contem somente horario, tipo de evento, codigo, canal e nomes de opcoes ativas. Tokens, chat, nomes de jogadores e conteudo de pacotes nao sao registrados.
+O endpoint exige sessao autenticada, aceita somente conexoes locais e limita o numero de registros.
+
+TESTE NECESSARIO NO JOGO
+1. Entre numa sala com outro jogador e aguarde 30 segundos sem ativar opcoes.
+2. Se a conexao permanecer, ative uma unica opcao e aguarde novamente.
+3. Se ocorrer DC, envie flash-diagnostics.jsonl e informe a opcao usada. Se o arquivo nao existir, envie a mensagem exibida na barra inferior e o trecho final de backend.log.
+
+VALIDACAO REALIZADA
+O fluxo de bytecode foi percorrido: os campos dos dois trechos antigos nao sao mais alcancados pelo loop. Somente swf_loaded e loop_game foram alterados entre os metodos originais; a classe ConnectionGuard foi adicionada. Quinze corpos novos/alterados passaram na verificacao de pilha/escopo.
+Cinco testes do endpoint de diagnostico, um teste de identificacao do backend e tres testes de inicio/encerramento/atualizacao passaram no ambiente Linux. O ZIP e o manifesto foram verificados.
+Nao foi realizado teste no Windows/Flash nem teste contra o servidor oficial. A causa exata do encerramento ainda precisa ser confirmada com os registros do seu ambiente.

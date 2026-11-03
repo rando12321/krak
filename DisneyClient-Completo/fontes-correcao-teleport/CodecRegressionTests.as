@@ -1,0 +1,42 @@
+// ActionScript 3 / LegacyTests.as / Ruffle AVM2 / ported control and lifecycle checks
+package disney {
+ import flash.display.MovieClip;import flash.display.Sprite;import flash.events.MouseEvent;import flash.events.Event;import flash.events.KeyboardEvent;import flash.text.TextField;import flash.geom.Point;import flash.external.ExternalInterface;import flash.utils.getTimer;import flash.utils.ByteArray;
+ public class RgbMouseTests {
+  private static var count:int=0;
+  private static function check(ok:Boolean,name:String):void{if(!ok)throw new Error(name);count++;}
+  private static function click(farm:Sprite,id:String):void{farm.getChildByName("sddsLegacy_"+id).dispatchEvent(new MouseEvent(MouseEvent.CLICK));}
+  private static function signed(bytes:ByteArray):int{var value:int=0;var shift:int=0;var part:int;do{part=bytes.readUnsignedByte();value=value | ((part & 127)<<shift);shift+=7;}while((part & 128)!=0);if(shift<32 && (part & 64)!=0)value=value | (-1<<shift);return value;}
+  public static function run(display:MovieClip):void{
+   var result:String;
+   try{
+    var r:MovieClip=new MovieClip();display.addChild(r);r["host_url"]=display.loaderInfo.url.replace(/[^\/]+$/," ").replace(/ $/,"");r["access_token"]="fixture";r["tfmdisney"]={data:{flash_token:"fixture"}};var farm:Sprite=new Sprite();var game:MovieClip=new MovieClip();var world:Sprite=new Sprite();var mouse:MovieClip=new MovieClip();world.addChild(mouse);game.addChild(world);r.addChild(game);game["mouse"]=mouse;game["world"]=world;mouse["dead"]=false;
+    r["Keys"]={player:"mouse",is_dead:"dead",tfm_obj_container:"world",legacy_inventory_class:"MockIcon",legacy_inventory_wrapper:"MockNotification",app_domain:{applicationDomain:{getDefinition:function(name:String):Class{return name=="MockIcon" ? MockIcon : MockNotification;}}}};
+    r["tfm"]=game;r["Interface"]={farm_ui:farm};r["current_map_code"]="@1";r["current_round_code"]=1;r["insta_win"]=true;r["insta_death2"]=true;r["insta_death"]=true;r["insta_win_timeout"]=0;r["insta_death_timeout"]=0;
+    var calls:Object={move:0,win:0,die:0,x:0,y:0};r["Statements"]={move_player:function(x:Number,y:Number):void{calls.move++;calls.x=x;calls.y=y;},player_victory:function():void{calls.win++;},player_death:function():void{calls.die++;}};
+    r.Keys.packet_handler="decode";r.Keys.packet_handler_class={decode:function(bytes:ByteArray):void{bytes.position=0;if(bytes.readUnsignedByte()!=8 || bytes.readUnsignedByte()!=3)throw new Error("Wrong movement header");calls.x=signed(bytes);calls.y=signed(bytes);calls.move++;check(bytes.readUnsignedByte()==0 && signed(bytes)==0 && signed(bytes)==0 && bytes.readUnsignedByte()==0 && bytes.bytesAvailable==0,"clean movement flags and velocities");}};
+    var mode:LegacyOptionsV5=new LegacyOptionsV5(r);var start:int=getTimer();mode.update(start);check(farm.getChildByName("sddsLegacy_teleport")!=null && farm.getChildByName("sddsLegacy_die")!=null,"six toggles present");
+    var time:TextField=farm.getChildByName("sddsLegacyFarmTime") as TextField;check(time!=null && time.text=="5000","Farm Time default");var children:int=farm.numChildren;mode.update(start+100);check(farm.numChildren==children,"no duplicated controls");
+    mode.teleport(12.4,22.7);check(calls.move==1 && calls.x==12 && calls.y==23,"teleport uses native movement and rounds pixels");
+    var failed:Boolean=false;try{mode.teleport(Number.NaN,0);}catch(e:Error){failed=true;}check(failed && calls.move==1,"invalid teleport rejected");
+    mode.keyDown(new KeyboardEvent(KeyboardEvent.KEY_DOWN,true,false,0,70));check(calls.move==1,"disabled hotkey no-op");mode.keyUp(new KeyboardEvent(KeyboardEvent.KEY_UP,true,false,0,70));
+    click(farm,"teleport");mode.keyDown(new KeyboardEvent(KeyboardEvent.KEY_DOWN,true,false,0,70));mode.keyDown(new KeyboardEvent(KeyboardEvent.KEY_DOWN,true,false,0,70));check(calls.move==2,"one action per key press");mode.keyUp(new KeyboardEvent(KeyboardEvent.KEY_UP,true,false,0,70));
+    r.stage.focus=time;mode.keyDown(new KeyboardEvent(KeyboardEvent.KEY_DOWN,true,false,0,70));check(calls.move==2,"typing does not teleport");mode.keyUp(new KeyboardEvent(KeyboardEvent.KEY_UP,true,false,0,70));r.stage.focus=r;
+    click(farm,"fake");var expected:Point=mouse.parent.globalToLocal(new Point(r.stage.mouseX,r.stage.mouseY));mode.keyDown(new KeyboardEvent(KeyboardEvent.KEY_DOWN,true,false,0,86));check(mouse.x==expected.x && mouse.y==expected.y && calls.move==2,"fake teleport changes only display");mode.keyUp(new KeyboardEvent(KeyboardEvent.KEY_UP,true,false,0,86));
+    click(farm,"win");check(!r.insta_win && !r.insta_death2 && !r.insta_death,"legacy automation disables duplicate old flags");var now:int=getTimer();mode.update(now+100);check(calls.win==0,"farm delay enforced");mode.update(now+5100);check(calls.win==1,"Auto Win uses existing statement");mode.update(now+5200);check(calls.win==1,"no per-frame repeat");
+    click(farm,"die");mode.update(now+10500);check(calls.win==1 && calls.die==1,"Auto Die excludes Auto Win");
+    time.text="0";time.dispatchEvent(new Event(Event.CHANGE));mode.update(now+20000);check(calls.die==1,"zero interval rejected");time.text="5000";time.dispatchEvent(new Event(Event.CHANGE));mouse.dead=true;mode.update(now+26000);check(calls.die==1,"dead player no automation");
+    mouse.dead=false;mode.update(now+30000);mode.update(now+34000);check(calls.die==1,"respawn resets delay");mode.update(now+35100);check(calls.die==2,"automation resumes after delay");click(farm,"die");
+    var popup:MockNotification=new MockNotification();var icon:MockIcon=new MockIcon();popup.addChild(icon);game.addChild(popup);var unrelated:Sprite=new Sprite();var inventoryIcon:MockIcon=new MockIcon();unrelated.addChild(inventoryIcon);game.addChild(unrelated);
+    click(farm,"inventory");mode.update(now+36000);check(!popup.visible && unrelated.visible && inventoryIcon.visible,"only received-item notification hidden");click(farm,"inventory");check(popup.visible,"notification restored on disable");
+    var box:Sprite=new Sprite();box.graphics.beginFill(0xFFFFFF);box.graphics.drawRect(0,0,37,39);box.x=150;box.y=120;world.addChild(box);click(farm,"collect");var moves:int=calls.move;mode.update(now+37000);check(calls.move==moves+1,"Collect Box uses native movement");mode.update(now+37600);check(calls.move==moves+1,"box not collected repeatedly");click(farm,"collect");
+    while(farm.numChildren)farm.removeChildAt(0);
+    LegacyOptionsV5.attach(r);r.stage.dispatchEvent(new Event(Event.ENTER_FRAME));click(farm,"teleport");r.stage.focus=r;
+    var bubbled:Boolean=false;var nativeHandler:Function=function(event:KeyboardEvent):void{bubbled=true;};r.stage.addEventListener(KeyboardEvent.KEY_DOWN,nativeHandler);
+    moves=calls.move;r.dispatchEvent(new KeyboardEvent(KeyboardEvent.KEY_DOWN,true,false,0,70));check(calls.move==moves+1 && !bubbled,"F handles child focus before native bubbling");r.dispatchEvent(new KeyboardEvent(KeyboardEvent.KEY_UP,true,false,0,70));
+    r.stage.removeEventListener(KeyboardEvent.KEY_DOWN,nativeHandler);r.stage.focus=r.stage;moves=calls.move;r.stage.dispatchEvent(new KeyboardEvent(KeyboardEvent.KEY_DOWN,true,false,0,70));check(calls.move==moves+1,"F works when Stage itself has focus");r.stage.dispatchEvent(new KeyboardEvent(KeyboardEvent.KEY_UP,true,false,0,70));
+    result="PASS: "+count+" teleport and legacy checks";
+   }catch(error:Error){result="FAIL: "+error.message+" #"+error.errorID;}
+   ExternalInterface.call("recordTest",result);
+  }
+ }
+}

@@ -1,0 +1,9 @@
+{
+  "build_id": "sdds-legacy-teleport-v3",
+  "avm2_checks": 24,
+  "live_windows_flash_tested": false,
+  "official_server_tested": false,
+  "teleport_uses_original_statements": true,
+  "stage_target_regression_reproduced_and_fixed": true,
+  "disconnect_cause_confirmed": false
+}

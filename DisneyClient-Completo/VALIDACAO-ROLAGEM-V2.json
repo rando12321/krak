@@ -1,0 +1,10 @@
+{
+  "checks_passed": 16,
+  "runtime": "Ruffle 0.7.1",
+  "wheel_capture": "stage with viewport cursor bounds",
+  "nested_clipping_removed": true,
+  "existing_methods_changed": [
+    "swf_loaded"
+  ],
+  "live_adobe_tested": false
+}

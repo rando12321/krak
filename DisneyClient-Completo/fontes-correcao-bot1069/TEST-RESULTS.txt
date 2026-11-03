@@ -1,0 +1,13 @@
+Executed 2026-11-03: Java 21, FFDec 26.4.0, Ruffle 0.7.1, Playwright + Chromium.
+PASS: 95 AVM2 native-keyboard/victory/clock/log assertions; 32 routes decoded; victory independent of route
+PASS: 787 pre-existing method bodies outside RoutePlayerFixed1069 unchanged; 49 helper bodies verified
+PASS: all SWF tags identical except the modified DoABC2 code tag
+PASS: full rebuild_precision.sh compilation, verification and runtime test workflow
+
+New regressions: precise direction transition, approach coasting without early
+reversal, pending transition retained until arrival, no invented jump for height
+alone, recorded recovery takeoff, one recovery takeoff per waypoint, no repeated
+jump on arrival after recovery, tighter same-state sample acceptance.
+Existing keyboard, native victory, clock, log, spatial synchronization, mirroring,
+32 decoded routes and 63-command recorded trajectory checks remain included.
+No live-server gameplay or Windows validation. Test physics is simulated.

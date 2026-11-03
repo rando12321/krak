@@ -1,0 +1,10 @@
+// Java / BuildNativeFixture.java / Java 21 + FFDec / test codec against real native game classes without starting the game
+import com.jpexs.decompiler.flash.*;import com.jpexs.decompiler.flash.tags.*;import com.jpexs.decompiler.flash.abc.*;import com.jpexs.decompiler.flash.abc.types.*;import com.jpexs.decompiler.flash.abc.avm2.*;import com.jpexs.decompiler.flash.abc.avm2.instructions.*;import com.jpexs.decompiler.flash.abc.avm2.parser.script.*;import java.io.*;import java.nio.file.*;import java.util.*;
+class BuildNativeFixture{public static void main(String[]args)throws Exception{
+ var s=new SWF(new FileInputStream(args[0]),false);DoABC2Tag tag=null;String doc=s.getDocumentClass();
+ for(Tag t:s.getTags())if(t instanceof DoABC2Tag && ((DoABC2Tag)t).getABC().findClassByName(doc)>=0)tag=(DoABC2Tag)t;
+ if(tag==null)throw new Exception("Document class missing");var a=tag.getABC();var idx=s.getAbcIndex();idx.selectAbc(a);
+ for(String file:new String[]{"LegacyOptionsV5.as","NativeFormatTests.as"})new ActionScript3Parser(idx).addScript(Files.readString(Path.of(args[1]).resolve(file)),file,a.instance_info.size(),a.script_info.size(),doc,a);
+ int main=a.findClassByName(doc),test=a.findClassByName("disney.NativeFormatTests");var body=a.findBody(a.instance_info.get(main).iinit_index);var code=new AVM2Code();code.code=new ArrayList<>(List.of(new AVM2Instruction(0,0xd0,new int[]{}),new AVM2Instruction(0,0x30,new int[]{}),new AVM2Instruction(0,0xd0,new int[]{}),new AVM2Instruction(0,0x49,new int[]{0}),new AVM2Instruction(0,0x60,new int[]{a.instance_info.get(test).name_index}),new AVM2Instruction(0,0xd0,new int[]{}),new AVM2Instruction(0,0x4f,new int[]{a.constants.getQnameId("run",0x16,"",true),1}),new AVM2Instruction(0,0x47,new int[]{})));
+ body.setCode(code);body.exceptions=new ABCException[0];body.max_stack=2;body.max_scope_depth=body.init_scope_depth+1;body.setModified();tag.setModified(true);s.setModified(true);try(var out=new FileOutputStream(args[2])){s.saveTo(out);}System.out.println("Native decoder fixture built");
+}}

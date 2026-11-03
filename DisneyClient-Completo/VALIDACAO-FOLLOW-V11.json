@@ -1,0 +1,12 @@
+{
+  "version": 11,
+  "functional_checks_passed": 45,
+  "runtime": "Ruffle 0.7.1",
+  "drift_threshold_pixels": 8,
+  "persistence_ms": 0,
+  "correction_step_pixels_approx": 24,
+  "correction_cooldown_ms": 80,
+  "max_packet_age_ms": 250,
+  "public_origin": "http://207.180.3.127:8080/",
+  "live_latency_measured": false
+}

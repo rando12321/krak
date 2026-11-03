@@ -1,0 +1,24 @@
+FUNCOES DO MENU ANTIGO - SDDS MENU
+
+Abra a aba Farm e role ate Funcoes do menu antigo. As seis opcoes com bolinha comecam desligadas; Farm Time e o setimo controle.
+
+Teleport [F]: ative e pressione F para usar o destino do cursor. A chamada ao manipulador nativo usa as coordenadas codificadas no formato variavel atual do jogo. Veja CORRECAO-TELEPORT-V5.txt.
+Fake Teleport [V]: ative e pressione V para deslocar so o desenho do jogador. A fisica continua na posicao real e o jogo pode reposicionar o desenho.
+Block Inventory: oculta avisos locais de itens recebidos. Identifica o tipo nativo do icone e somente sua janela de notificacao; nao remove itens da conta. Desligar restaura a visibilidade. Nao substitui leitores de rede.
+Collect Box: procura caixas 37x39 no mundo do mapa e aplica a rotina de movimento ate a caixa, uma vez por objeto e por rodada. Essa medida vem do projeto antigo. Nenhuma caixa encontrada e informado no status; o funcionamento com eventos atuais depende da existencia desse objeto no mapa.
+Auto Win / Auto Die: usam as rotinas player_victory/player_death existentes no client. Sao mutuamente exclusivos e desativam flags/timers antigos equivalentes para evitar duas rotinas simultaneas. As rotinas enviam tentativas; a aceitacao pelo servidor nao foi testada.
+Farm Time (ms): intervalo entre tentativas, de 500 a 600000. Padrao 5000 (5 segundos). O intervalo reinicia ao mudar de rodada ou renascer. Nao repete enquanto o jogador estiver morto.
+
+Atalhos F e V ficam suspensos ao digitar em campos de texto ou no chat.
+O status de execucao aparece abaixo do grupo na aba Farm.
+
+INSTALACAO
+Feche Flash e iniciador. Extraia todo o ZIP em uma pasta nova e abra INICIAR_CLIENT.bat. Depois abra no Flash a URL local gerada.
+O pacote usa a base Nick/Titulo v2, com RGB MODE circular, WJ Fly retirado e massa desligada por padrao.
+Nao inclui chaves, sessoes nem banco particular. Nenhum servidor externo do projeto antigo foi incorporado.
+
+VALIDACAO
+24 verificacoes AS3 no Ruffle: controles, atalhos, digitacao, intervalo, morte/renascimento, exclusao das automacoes, notificacoes e coleta simulada.
+3 verificacoes Python: tipos nativos extraidos da SWF recebida, rejeicao de tipo ausente e rejeicao de ambiguidade.
+Validacao estrutural do loader: somente callback de carregamento original modificado, com nova classe; metodos antigos preservados.
+Nao validado no Adobe Flash real nem no servidor do jogo. A coleta de caixas do evento antigo precisa ser confirmada em um mapa com esse objeto.

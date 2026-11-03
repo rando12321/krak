@@ -1,0 +1,15 @@
+VISUAL NOVO DO MENU
+
+Painel escuro com destaque roxo, navegacao lateral por categoria, cabecalho arrastavel, botao de fechar e area de controles com rolagem. Os controles existentes do jogo foram reaproveitados; as abas Farm e Bot aparecem conforme os componentes disponiveis na instalacao e na licenca.
+A roda do mouse percorre a area de controles. O botao Menu Disney permite reabrir o painel. A abertura automatica no carregamento continua integrada.
+
+COMO ABRIR
+Feche a instalacao antiga. Extraia o ZIP inteiro e abra somente INICIAR_CLIENT.bat na pasta DisneyClient-Completo. Sem selecao de pastas e sem pacotes de correcao separados. Mantenha MySQL/XAMPP ligado e Python 3.11+ instalado. Autentique sua key no backend e use o link local no runtime Flash compativel.
+
+AOBS RECEBIDAS
+As assinaturas fornecidas representam instrucoes de memoria nativa x86/SSE. Elas ainda nao foram aplicadas nem transformadas em novos botoes neste pacote. E necessario identificar o executavel/runtime que abre o link local e validar os patches nessa versao.
+Foram encontrados problemas nos bytes de reversao: Ghost OFF F2 05 58 diverge de F2 0F 58; WJ Fly OFF F3 07 diverge de F3 0F; Rato Agil tem substituicao e reversao com tamanhos diferentes; Shaman no range contem curingas no OFF, que exigem recuperar os bytes originais. A presenca da assinatura sozinha nao comprova que o efeito anunciado funciona na versao atual.
+
+VALIDACAO
+Somente swf_loaded foi alterado entre os metodos originais. A classe MenuBootstrap foi adicionada; os 22 corpos novos/alterados passaram na verificacao estatica de pilha e escopo. Integridade do arquivo, manifesto e manutencao dos componentes de inicio/parser foram verificados.
+O visual e os controles nao foram executados no Flash/AIR neste ambiente. Windows/PowerShell, a SWF remota atual e o login oficial tambem continuam sem teste. Os outros recursos do client nao foram validados.

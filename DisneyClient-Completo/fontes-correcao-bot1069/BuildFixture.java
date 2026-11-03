@@ -1,0 +1,15 @@
+// Java / BuildFixture.java / Java 21 + FFDec / execute real RoutePlayer with mock game objects
+import com.jpexs.decompiler.flash.*;import com.jpexs.decompiler.flash.tags.*;import com.jpexs.decompiler.flash.abc.*;import com.jpexs.decompiler.flash.abc.types.*;import com.jpexs.decompiler.flash.abc.avm2.*;import com.jpexs.decompiler.flash.abc.avm2.instructions.*;import com.jpexs.decompiler.flash.abc.avm2.parser.script.*;import java.io.*;import java.nio.file.*;import java.util.*;
+class BuildFixture {public static void main(String[]args)throws Exception{
+ SWF s=new SWF(new FileInputStream(args[0]),false);DoABC2Tag tag=null;for(Tag t:s.getTags())if(t instanceof DoABC2Tag&&((DoABC2Tag)t).getABC().findClassByName("ChargeurTransformice_fla.MainTimeline")>=0)tag=(DoABC2Tag)t;ABC a=tag.getABC();var idx=s.getAbcIndex();idx.selectAbc(a);new ActionScript3Parser(idx).addScript(Files.readString(Path.of(args[1])),"RoutePlayerTests.as",a.instance_info.size(),a.script_info.size(),s.getDocumentClass(),a);
+ int main=a.findClassByName("ChargeurTransformice_fla.MainTimeline"),test=a.findClassByName("disney.RoutePlayerTests");var body=a.findBody(a.instance_info.get(main).iinit_index);var c=new AVM2Code();
+ c.code=new ArrayList<>(List.of(new AVM2Instruction(0,0xd0,new int[]{}),new AVM2Instruction(0,0x30,new int[]{}),new AVM2Instruction(0,0xd0,new int[]{}),new AVM2Instruction(0,0x49,new int[]{0}),new AVM2Instruction(0,0x60,new int[]{a.instance_info.get(test).name_index}),new AVM2Instruction(0,0xd0,new int[]{}),new AVM2Instruction(0,0x4f,new int[]{a.constants.getQnameId("run",0x16,"",true),1}),new AVM2Instruction(0,0x47,new int[]{})));
+ // Test only: replace the preserved native alias with a recorder, so the
+ // production wrapper itself can be executed without loading a game server.
+ for(var trait:a.instance_info.get(main).instance_traits.traits)if(trait instanceof com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter && "sddsNativeHandlePacket".equals(a.constants.getString(a.constants.getMultiname(trait.name_index).name_index))){
+  var alias=a.findBody(((com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter)trait).method_info);var stub=new AVM2Code();
+  stub.code=new ArrayList<>(List.of(new AVM2Instruction(0,0xd0,new int[]{}),new AVM2Instruction(0,0x30,new int[]{}),new AVM2Instruction(0,0x60,new int[]{a.instance_info.get(test).name_index}),new AVM2Instruction(0,0xd0,new int[]{}),new AVM2Instruction(0,0xd1,new int[]{}),new AVM2Instruction(0,0xd2,new int[]{}),new AVM2Instruction(0,0x4f,new int[]{a.constants.getQnameId("captureNative",0x16,"",true),3}),new AVM2Instruction(0,0x47,new int[]{})));
+  alias.setCode(stub);alias.exceptions=new ABCException[0];alias.max_stack=4;alias.max_scope_depth=Math.max(alias.max_scope_depth,alias.init_scope_depth+1);alias.setModified();
+ }
+ body.setCode(c);body.exceptions=new ABCException[0];body.max_stack=2;body.setModified();tag.setModified(true);s.setModified(true);try(var out=new FileOutputStream(args[2])){s.saveTo(out);}System.out.println("Fixture built");
+}}

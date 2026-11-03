@@ -1,0 +1,10 @@
+{
+  "checks_passed": 10,
+  "runtime": "Ruffle 0.7.1",
+  "scope": "Player tab wheel scrolling",
+  "existing_methods_changed": [
+    "swf_loaded"
+  ],
+  "follow_methods_unchanged": true,
+  "live_adobe_tested": false
+}

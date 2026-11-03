@@ -1,0 +1,98 @@
+FOLLOW V13 — CALCULO DE COORDENADAS DA V3 ENVIADA PELO USUARIO
+
+Uso: /follow Nome#0000. Parar: /follow off ou Esc.
+VPS: http://207.180.3.127:8080
+
+A v13 usa o calculo de posicao da DisneyClient-Completo-SDDS-Follow-v3.zip enviada pelo usuario: le found.x/found.y, converte source.parent.localToGlobal para destination.parent.globalToLocal e aplica new vectorClass(x/30,y/30) pelo setter nativo de fisica. Depois atualiza local.x e local.y. Recalcula a cada quadro, inclusive sem um novo pacote. Nao usa as coordenadas brutas de pacotes para substituir essa posicao. Conserva os controles de direcao e salto por pacote das versoes atuais. A rotina de copia de velocidades da v3 nao foi importada: esta mudanca adota o calculo de coordenadas solicitado.
+
+Mantem o teleport nativo inicial e pausas por digitacao, perda de foco, morte, ausencia do alvo e /follow off. Setter de fisica bloqueado pausa a aplicacao e pode ser tentado novamente. Nao ha limite de passo de aproximacao nem intervalo de 80 ms para copiar posicao nesta versao.
+
+Instalacao: feche iniciador e Flash, substitua os arquivos preservando DisneyClient/.env, reinicie INICIAR_CLIENT.bat e gere uma URL nova. Confira "Follow v13: coordenadas da v3" no HUD. Nao houve instalacao na VPS.
+
+Verificacao: 27 testes funcionais simulados AVM2 no Ruffle 0.7.1, adaptados dos testes da v3 enviada. Inclui coordenadas exatas, /30 na fisica, mudanca de direcao, salto por estado nativo, pausas, renascimento, troca de rodada, bloqueio temporario da fisica e transformacoes entre contêineres com escalas diferentes. Confirma que coordenadas brutas conflitantes do pacote nao substituem as da v3 e que a posicao muda por quadro sem um novo pacote. Bytecode/pilha e endereco da VPS verificados. Falta validar no Adobe e servidor real; a atualizacao ainda depende do estado que o servidor transmite.
+
+Fontes atuais: FollowControllerV13.as, PatchFollowV13.java e FollowTestsV13.as. Compilar sobre a SWF v8 original e aplicar fontes-vps/PatchAddress.java depois. Os documentos abaixo descrevem versoes anteriores e nao o comportamento atual.
+
+--- HISTORICO ---
+
+FOLLOW V12 — POSICAO DE CADA MOVE RECEBIDO
+
+Comando: /follow Nome#0000. Parar: /follow off ou Esc.
+IP mantido: http://207.180.3.127:8080
+
+Cada pacote 4/4 recebido do jogador seguido fornece X/Y, direcao e salto. A v12 aplica as coordenadas completas pelo handler nativo de posicao assim que recebe o pacote. Conversao de coordenadas: inteiro recebido /100 *30 pixels. Remove o limite de passo de 24 pixels, a tolerancia de desvio e o intervalo entre correcoes das versoes anteriores. Mesmo dois pacotes com 1 ms de diferenca podem atualizar a posicao. Cada pacote e aplicado uma unica vez; ENTER_FRAME nao repete posicoes antigas. Mantem teclas nativas de movimento/salto entre os pacotes. Nao usa as coordenadas visuais do alvo para substituir um move novo, exceto o sincronismo inicial.
+
+Pausa ao digitar, perder foco, morrer ou perder o alvo. Dados recebidos enquanto digita sao descartados. /follow off libera os controles. Pacotes incompletos e de outros jogadores nao reposicionam. A codificacao nativa usa 1 pixel para coordenada zero.
+
+Instalacao: feche iniciador e Flash, substitua os arquivos preservando DisneyClient/.env, reinicie INICIAR_CLIENT.bat e gere uma URL nova. Confira "Follow v12: coordenadas por move" no HUD.
+
+Validacao: 41 verificacoes simuladas AVM2 no Ruffle 0.7.1; inclui posicoes sucessivas sem intervalo, coordenadas assinadas, movimento visual desatualizado, pacote truncado, nao repetir por quadro, pausas e desligamento. Bytecode/pilha e endereco da VPS verificados. Nao foi testado no servidor real. A atualizacao acompanha a frequencia de pacotes recebidos; nao garante latencia zero nem aceitacao dos reposicionamentos pelo servidor. Nenhuma implantacao na VPS foi realizada.
+
+Fontes atuais: FollowControllerV12.as, PatchFollowV12.java e FollowTestsV12.as. Compile sobre a SWF v8 original e aplique PatchAddress.java depois. A documentacao abaixo e historica; os limites de aproximacao antigos nao se aplicam a v12.
+
+--- HISTORICO ---
+
+FOLLOW V11 — ACOMPANHAMENTO MAIS PROXIMO
+
+Comando: /follow Nome#0000 | parar: /follow off ou Esc.
+Endereco publico mantido: http://207.180.3.127:8080
+
+A distancia tolerada caiu de 24 para 8 pixels. A espera de 120 ms para confirmar desvio foi removida: o client pode corrigir na chegada do pacote. O intervalo minimo entre pequenos teleports caiu de 400 para 80 ms. Cada passo continua limitado a aproximadamente 24 pixels, sujeito a arredondamento. Se estiver muito longe, as correcoes aproximam gradualmente. Usa somente posicoes recentes do alvo (ate 250 ms). A fisica e a velocidade nao sao sobrescritas continuamente. Mantem controles nativos, salto e teleport inicial por rodada/renascimento.
+
+Esta versao reduz esperas introduzidas pelo client. Nao mede nem remove a latencia do servidor/conexao, e nao garante movimento perfeito. Teste no Adobe e servidor real para avaliar a diferenca percebida.
+
+Instalacao: feche o iniciador e o Flash; substitua os arquivos preservando DisneyClient/.env; abra INICIAR_CLIENT.bat e gere uma URL nova. Confira "Follow v11: proximo ao alvo" no HUD. Nao houve implantacao na VPS.
+
+Validacao: 45 testes AVM2 simulados no Ruffle 0.7.1. Inclui reacao por pacote, correcao imediata de 16 pixels, intervalo de 80 ms, limite do passo, proximidade sem TP, dados antigos, correcao vertical/diagonal e pausas por chat, morte e desligamento. Bytecode/pilha verificados; IP da VPS verificado separadamente. Nao houve medicao da latencia real.
+
+Recompilacao: PatchFollowV11.java usa a SWF v8 original e FollowControllerV11.as; depois PatchAddress.java troca o endpoint antigo pelo IP da VPS. FollowTestsV11.as gera somente fixture de testes.
+
+--- HISTORICO DAS VERSOES ANTERIORES ---
+
+FOLLOW V10 — CORRECAO DE DESVIO COM PEQUENOS TELEPORTS
+
+Uso: /follow Nome#0000 | parar: /follow off ou Esc.
+
+Conserva controles normais e resposta imediata aos pacotes da v9. Quando a distancia para a posicao recebida do alvo e de pelo menos 24 pixels por 120 ms, aplica um pequeno teleport em direcao ao alvo. Cada passo tem aproximadamente 24 pixels (arredondamento para pixels inteiros), com intervalo minimo de 400 ms. Se continuar afastado, as correcoes seguintes aproximam gradualmente; nao faz um salto grande diretamente ate o alvo.
+
+Somente pacotes do alvo com no maximo 250 ms permitem corrigir. Sem dados recentes, durante digitacao, sem foco, morto, sem alvo na sala ou com o follow desligado, nao aplica correcao. Mudancas de mapa/renascimento reiniciam a sincronizacao inicial. A correcao pode ajustar altura e posicao, mas nao escreve velocidade nem repete teclas de salto por quadro. A codificacao nativa usa 1 pixel para coordenadas zero.
+
+Instalacao: feche o Flash, substitua DisneyClient/public/ChargeurTransformice.swf, preserve seu .env e gere uma URL nova. O HUD deve mostrar "Follow v10: correcao de desvio".
+
+Validacao: 45 testes funcionais simulados no Ruffle 0.7.1 e verificacao de bytecode/pilha FFDec 26.4.0. Inclui intervalo entre correcoes, tolerancia a pequenas distancias, persistencia do erro, correcao vertical e diagonal, dados antigos, digitacao, desligamento e preservacao das velocidades. Falta confirmar no Adobe e servidor real; nao garante movimentos perfeitos nem aceitacao do teleport pelo servidor. Nenhuma implantacao na VPS foi feita.
+
+Fontes: FollowControllerV10.as, PatchFollowV10.java e FollowTestsV10.as. PatchFollowV10 recebe como base a SWF v8 original. BuildFollowFixture gera somente testes. Documentacao antiga abaixo descreve versoes anteriores e nao os novos pequenos teleports.
+
+--- HISTORICO ---
+
+SDDS FOLLOW V9 — RESPOSTA IMEDIATA AOS PACOTES
+
+Base: v8 funcional enviada pelo usuario. Conserva teleport inicial unico e controles normais. Nao copia continuamente posicao ou velocidade e nao altera a fisica vertical.
+
+Comando: /follow Nome#0000
+Parar: /follow off ou Esc.
+
+Mudanca: os indicadores de esquerda, direita e salto do pacote de movimento 4/4 do alvo acionam os controles durante o recebimento, sem aguardar ENTER_FRAME e a atualizacao visual. O estado recebido tem prioridade por 250 ms; depois o controlador volta ao acompanhamento normal da v8. Outras pessoas nao acionam os controles. A troca de mapa invalida os dados anteriores. Pausas por foco e digitacao da v8 foram mantidas.
+
+O HUD mostra "Follow v9: resposta por pacote" quando esta acompanhando. Isso identifica a versao e o modo; nao mede latencia. Nao e possivel remover o tempo de rede/servidor nem garantir atraso zero. A melhora percebida ainda precisa ser medida no Adobe com o servidor real.
+
+Instalacao: feche o Flash e substitua DisneyClient/public/ChargeurTransformice.swf. Preserve o .env existente. Gere uma URL nova e confira v9 no HUD. Nenhuma implantacao na VPS foi realizada.
+
+Verificacao: 34 testes AVM2 no Ruffle 0.7.1 (26 da v8 + 8 de resposta por pacote). Verificacao de bytecode confirma mudanca apenas nos hooks de inicializacao e observacao dos pacotes entre os metodos preexistentes, com limites de pilha validos. O parser da v8 nao foi alterado; seus testes dependem de fixtures externas que nao estao neste pacote e nao foram reexecutados.
+
+Recompilacao: PatchFollowV9.java recebe a SWF V8 original e fontes-follow/FollowControllerV9.as. FollowTestsV9.as e BuildFollowFixture.java geram somente uma SWF de testes. A classe antiga permanece no arquivo para preservar a estrutura, mas seu hook foi substituido pelo da v9.
+
+--- DOCUMENTACAO DA BASE V8 ---
+
+SDDS MENU - FOLLOW V8 - FISICA NORMAL
+
+Feche o Flash e o iniciador anterior. Extraia este ZIP completo em uma pasta nova e abra INICIAR_CLIENT.bat.
+No chat: /follow Nome#0000. Para parar: /follow off ou Esc.
+
+V8: margem para reagir a distancia reduzida de 18 para 4 pixels. Perto do alvo, o movimento usa os indicadores nativos de esquerda/direita para reagir sem esperar abrir distancia. Inverter a direcao libera a tecla anterior antes de apertar a oposta. Mantem a fisica normal e nao altera velocidade vertical. A latencia da rede e o intervalo das atualizacoes do servidor continuam existindo; nao ha garantia de atraso zero. V7: o parser agora deriva is_jumping do metodo nativo jump(Boolean, int), validando o campo Boolean escrito e testado nos dois estados. Nao usa velocidade vertical nem deslocamento para adivinhar pulo. A tecla e enviada uma vez na mudanca para ligado e liberada ao desligar, sem repeticao por quadro. Feche o parser anterior e extraia em uma pasta nova para recalcular os simbolos. V6: removida a verificacao de player_clip no alvo remoto. Esse campo identifica o rato local, nao indica se outro jogador esta vivo ou ativo. O teste inclui alvo remoto com campo false. Esta versao remove a copia continua de posicao e de velocidade. Apos o teleport inicial, o client apenas aciona os controles de movimento normais em direcao ao alvo. Nao modifica a velocidade vertical nem reposiciona a cada quadro.
+O teleport inicial acontece uma vez por comando ou rodada/renascimento. Abrir o chat, alternar a janela ou reencontrar o alvo na mesma rodada nao repete o teleport.
+Quando o alvo fica morto ou e removido da lista/mapa, os controles sao liberados. A entrada na toca precisa ser conferida no jogo real; nao se usa mais o campo de jogador local para inferir esse estado. O Follow nao envia comandos de morte ou vitoria para copiar a entrada na toca.
+Pulo so e acionado se um campo booleano real do alvo for identificado. Sem esse simbolo, o HUD informa que o pulo esta indisponivel: esta versao nao garante copiar escaladas ou concluir mapas com obstaculos.
+Digite com o chat aberto para pausar; fechar o chat retoma. Perder foco pausa e retornar retoma.
+
+Validacao: 26 testes AVM2 e 5 testes de extracao/integracao do parser em Ruffle e verificacao estrutural. A ausencia de DC e o comportamento no Adobe_10.exe com servidor real precisam ser verificados. O teleport inicial ainda pode ser rejeitado pelo servidor; esta versao nao impede o servidor de fechar a conexao.

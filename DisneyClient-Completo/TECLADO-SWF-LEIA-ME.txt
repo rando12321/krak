@@ -1,0 +1,93 @@
+AUTOPLAY POR TECLADO INTERNO DO SWF
+
+BASE: DisneyClient-Follow-SemAnimacao-Chegada.zip, commit
+35ce8ec78f7ff2b2428d42a77ec1312c62bcc137 de juninhpsx/krakitos.
+
+INSTALAR
+Feche o Flash. Extraia o ZIP inteiro em uma pasta nova e abra
+INICIAR_CLIENT.bat. Login, parser e mapas foram preservados.
+Se utiliza uma VPS, atualize o SWF servido por ela:
+DisneyClient/public/ChargeurTransformice.swf
+Reabra o Flash para carregar a nova versao.
+
+FUNCIONAMENTO
+O Autoplay interpreta mr/ml/jump e os intervalos da rota antiga para
+pressionar, manter e soltar direita, esquerda e cima. Agachar usa baixo.
+KEY_DOWN ocorre apenas ao pressionar; KEY_UP ocorre ao soltar. Nao ha
+pulsos de 1 ms nem repeticao de KEY_DOWN a cada quadro.
+Os eventos partem do conteudo do jogo e propagam ate o Stage. O jogo
+recebe essas entradas e executa sua movimentacao e animacao normais.
+Nao escreve posicao, vx/vy, flags de movimento ou quadros de animacao.
+Nao usa Python auxiliar, SendInput nem teclas do Windows.
+
+TEMPO E INTERRUPCOES
+Cada intervalo e contado a partir da execucao real do comando anterior.
+Atrasos nao encurtam a proxima tecla para recuperar o relogio antigo.
+Os valores gravados sao milissegundos entre eventos, nao duracoes em
+segundos nem timestamps absolutos. O delay do menu nao e subtraido.
+No maximo um comando por frame; atraso acima de 750 ms pausa sem
+comprimir o restante da rota. Mapas espelhados invertem esquerda/direita.
+As teclas mantidas sao liberadas ao terminar, desligar, pausar, abrir
+campo de texto, perder foco, morrer, vencer ou desconectar.
+Uma tecla manual pausa quando a opcao correspondente estiver habilitada.
+A reproducao interna nao aciona sua propria pausa por tecla manual.
+
+SINCRONIZACAO COM A POSICAO REAL
+Antes de aplicar cada amostra walk, o bot compara a posicao observada
+com a posicao gravada. A leitura usa a transformacao fisica nativa e
+converte as unidades para pixels; nao modifica o corpo do rato.
+O passo so avanca quando seu intervalo venceu E o ponto foi alcancado
+(tolerancia de 12px horizontal / 18px vertical), ou cruzado entre frames
+com distancia de ate 12px. Cruzar apenas X na altura errada nao basta.
+Se o tempo venceu antes da chegada, o passo fica pendente. O controle
+faz alinhamento local usando esquerda/direita e salto pelo teclado.
+Quando alinha, o intervalo seguinte comeca nesse instante, sem recuperar
+atrasos consumindo outros pontos. Espelhamento e aplicado aos alvos.
+Se nao houver progresso por 1500ms ou o alinhamento durar mais de 5000ms,
+solta as teclas e pausa: ponto nao alcancado; nenhum passo pulado.
+Obstaculos ou trechos que dependiam de reposicionamento podem impedir
+a recuperacao local. Nesse caso o bot pausa em vez de terminar no lugar.
+O log sincronizar AGUARDANDO/ALINHADO/PAUSADO mostra passo, atual, alvo,
+erro em pixels e falta de progresso. A ultima operacao no menu inclui
+tanto eventos de teclado quanto alinhamento.
+
+CHEGADA E LOGS
+Preservada a correcao de confirmacao verdadeira da toca: o pacote real
+de vitoria do proprio jogador chega ao handler original sem ser
+suprimido pelo filtro de ordem repetida de No Delay. Os bytes e o canal
+originais sao mantidos; a configuracao e restaurada em finally.
+Marcadores de queijo/toca nao fabricam pacotes de coleta ou chegada.
+O jogo e o servidor processam a coleta e a chegada normais.
+Mantidos historico integral, rolagem e Copiar tudo. O log mostra antes
+e depois de cada transicao de teclado e imprime disconnect uma vez,
+solta os controles e congela a execucao/historico nessa desconexao.
+
+LIMITES DA CONVERSAO
+Rotas antigas armazenam estados e snapshots da fisica, nao uma gravacao
+completa dos eventos de teclado originais. jump representa o estado
+gravado de salto; a conversao usa esse estado para manter/soltar cima.
+Coordenadas, velocidades e frame antigos sao lidos para compatibilidade
+do formato, mas nao sao aplicados ao personagem. Por isso, rotas que
+dependiam de reposicionamento podem precisar de nova gravacao ou ajuste.
+Nao e possivel garantir trajetoria identica apenas com esses dados.
+Nao ha ocultacao nem falsificacao de movimento. Esta alteracao nao
+permite afirmar que toda causa de disconnect foi corrigida.
+
+VALIDACAO
+86 assercoes AVM2 em Ruffle: teclas vistas no jogo e no Stage, estados
+mantidos sem repeticao, soltura antes de inversao, salto, agachamento,
+espelhamento, pausas, desligamento, foco/chat, disconnect, relogio,
+confirmacao nativa da vitoria e logs. Inclui regressao de comandos
+atrasados e manutencao de 100ms completos apos uma inversao atrasada.
+O log apply mostra intervalo/mantido/atraso e relogio.teclado mostra
+o proximo prazo calculado a partir da execucao.
+32 formatos de rotas decodificados;
+63 comandos do mapa @2294519 verificados com observacoes da trajetoria
+gravada, sem setters fisicos no driver. Teste separado integra um motor
+simulado lento a partir das teclas para verificar que os pontos aguardam
+deslocamento, inclusive no retorno e com bloqueio/parada do personagem.
+Comparacao do bytecode preserva o handler original como alias exato,
+login e demais metodos fora do allowlist. SHA256 dos arquivos incluido.
+Os testes usam objetos de jogo simulados. Nao foi executada uma partida
+real no seu tfm.swf/servidor; animacao e fisica ao vivo precisam desse teste.
+Fontes e teste em fontes-correcao-bot1069.

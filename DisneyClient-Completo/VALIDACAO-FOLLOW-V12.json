@@ -1,0 +1,11 @@
+{
+  "version": 12,
+  "functional_checks_passed": 41,
+  "runtime": "Ruffle 0.7.1",
+  "position_source": "each incoming target movement packet 4/4",
+  "position_cooldown_ms": 0,
+  "position_step_limit": null,
+  "per_frame_position_replay": false,
+  "public_origin": "http://207.180.3.127:8080/",
+  "live_server_tested": false
+}

@@ -1,0 +1,15 @@
+{
+  "physics_assertions_in_avm2": 23,
+  "parser_test_methods": 2,
+  "game_fixtures": 3,
+  "integrated_user_game_symbols": 135,
+  "diagnostic_tests": 5,
+  "installer_tests": 4,
+  "changed_original_swf_methods": [
+    86,
+    87
+  ],
+  "prior_menu_methods_unchanged": true,
+  "original_socket_and_timer_interception_unreachable": true,
+  "windows_or_official_server_tested": false
+}

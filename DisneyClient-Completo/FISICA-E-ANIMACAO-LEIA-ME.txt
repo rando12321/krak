@@ -1,0 +1,10 @@
+VERSAO ATUAL: Autoplay por teclado interno do SWF.
+Leia TECLADO-SWF-LEIA-ME.txt. O texto abaixo descreve versoes anteriores.
+
+VERSAO ATUAL: Autoplay por teclado interno do SWF.
+Leia TECLADO-SWF-LEIA-ME.txt. O texto abaixo descreve versoes anteriores.
+
+VERSAO ATUAL: Autoplay por teclado interno do SWF.
+Leia TECLADO-SWF-LEIA-ME.txt. O texto abaixo descreve versoes anteriores.
+
+As animacoes adicionais foram retiradas nesta versao. Leia SEM-ANIMACAO-CHEGADA-LEIA-ME.txt.

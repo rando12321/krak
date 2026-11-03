@@ -1,0 +1,13 @@
+{
+  "actionscript_runtime": "Ruffle AVM2 with mock native game objects",
+  "actionscript_assertions": 24,
+  "actual_route_runtime_samples": 32,
+  "all_saved_routes_schema_checked": 2359,
+  "native_patch_simulated_memory_tests": 9,
+  "native_api_tests": 6,
+  "parser_tests": 2,
+  "reference_swfs_with_5_bot_symbols": 2,
+  "unchanged_existing_network_loop": true,
+  "windows_win32_calls_tested": false,
+  "official_game_server_tested": false
+}

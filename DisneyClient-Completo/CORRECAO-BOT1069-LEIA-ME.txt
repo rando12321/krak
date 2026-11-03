@@ -1,0 +1,1 @@
+A correcao de #1069 permanece incluida. Esta versao usa controles nativos e historico completo. Leia DIAGNOSTICO-AUTOPLAY-LEIA-ME.txt para o comportamento atual e validacao.

@@ -1,0 +1,29 @@
+DISNEYCLIENT COMPLETO COM VISUAL NOVO
+
+Este e o ZIP completo enviado por voce, com a correcao do menu integrada diretamente e inicio sem selecao de pastas. Nao exige os pacotes de atualizacao anteriores nem CORRIGIR_MENU.bat.
+
+Extraia o ZIP inteiro e abra apenas INICIAR_CLIENT.bat dentro de DisneyClient-Completo. Se o iniciador for aberto sozinho, ele tenta localizar este ZIP em Downloads e extrair automaticamente em LocalAppData/DisneyClientAutoplay-v1. Nenhuma janela de selecao de pasta sera exibida.
+
+O iniciador prepara as dependencias na primeira abertura, inicia parser e backend e abre o login local. Mantenha o MySQL do XAMPP ligado. Se o banco disneyclient ainda nao existe, importe DisneyClient/setup_xampp.sql no phpMyAdmin uma vez. Python 3.11+ e internet continuam necessarios.
+A configuracao local .env e o token do parser sao criados quando ausentes. Se seu MySQL usa senha, usuario ou porta diferentes do padrao local do XAMPP, ajuste DisneyClient/.env. Suas licencas existentes no banco continuam necessarias para autenticar no backend.
+
+Depois de autenticar a key e abrir o link local gerado no runtime Flash compativel, o loader tenta mostrar o menu ao carregar o jogo. Ha um botao Abrir menu no canto superior esquerdo para abrir/fechar a interface. Se a construcao falhar, o jogo mostra os simbolos ausentes ou o codigo Flash correspondente.
+
+O parser continua baixando o jogo pelo link original do projeto e extraindo seus simbolos automaticamente. Nenhuma SWF 158 de exemplo esta fixada ou embutida neste pacote. A normalizacao dos nomes foi corrigida e as sete dependencias de interface que faltavam agora integram os 118 simbolos exigidos nas builds de teste.
+
+Este pacote nao altera a autenticacao nem inclui credenciais, tokens, banco ou chaves particulares. Nao precisa sobrescrever sua instalacao anterior; ela pode ser mantida como backup. Feche a janela do iniciador antigo antes de abrir esta instalacao para liberar as portas locais.
+
+Verificacao: integridade do ZIP, presenca dos arquivos de inicio, igualdade das alteracoes integradas, oito testes de descoberta/inicio, quatro testes de extracao nas duas SWFs fornecidas e verificacao estatica do loader. Somente swf_loaded foi alterado entre os metodos originais; a classe MenuBootstrap foi adicionada. Os outros recursos do client nao foram validados.
+Windows, a extracao pelo PowerShell, Flash/AIR, a SWF remota atual e o login oficial nao foram executados neste ambiente.
+
+Consulte VISUAL-NOVO.txt para as mudancas de tema e o estado das AoBs recebidas.
+
+Esta edicao adiciona a marca amarela Sdds CHEATS start. Consulte TEXTO-INICIAL.txt.
+
+Esta edicao preserva a rede original e inclui diagnostico de desconexao. Consulte CONEXAO-E-DIAGNOSTICO.txt.
+
+Esta edicao preserva a rede original e inclui diagnostico de desconexao. Consulte CONEXAO-E-DIAGNOSTICO.txt.
+
+Edicao Autoplay: consulte AUTOPLAY-LEIA-ME.txt para ativar as rotas salvas.
+
+Edicao Autoplay: consulte AUTOPLAY-LEIA-ME.txt para ativar as rotas salvas.

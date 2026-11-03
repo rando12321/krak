@@ -1,0 +1,34 @@
+VERSAO ATUAL: Autoplay por teclado interno do SWF.
+Leia TECLADO-SWF-LEIA-ME.txt. O texto abaixo descreve versoes anteriores.
+
+VERSAO ATUAL: Autoplay por teclado interno do SWF.
+Leia TECLADO-SWF-LEIA-ME.txt. O texto abaixo descreve versoes anteriores.
+
+VERSAO ATUAL: Autoplay por teclado interno do SWF.
+Leia TECLADO-SWF-LEIA-ME.txt. O texto abaixo descreve versoes anteriores.
+
+AUTOPLAY POR ROTAS SALVAS
+
+COMO INICIAR
+1. Feche o Flash e o INICIAR_CLIENT anteriores.
+2. Extraia o ZIP completo em uma pasta nova e abra INICIAR_CLIENT.bat.
+3. Use a key no localhost e cole a URL gerada no Adobe Flash, como antes.
+4. No menu Bot, ative Autoplay (F2). Para o primeiro teste, use delay reduzido 0 para preservar os intervalos da gravacao.
+5. Ao identificar um mapa com rota salva, o bot inicia quando o jogador e o contador nativo liberarem o movimento. Ele reinicia numa nova rodada ou apos renascer.
+
+O status do menu mostra o codigo do mapa, o progresso da rota, a espera para renascer, a pausa, erros ou a ausencia de rota. Se aparecer "sem rota salva", esse mapa nao esta na sua base carregada. A base compartilhada incluida contem 2359 rotas; o backend pode carregar sua base pessoal quando ela estiver configurada.
+Para parar, desative Autoplay. A opcao "Parar com uma tecla de movimento" pausa a rota quando voce pressiona WASD/setas fora de um campo de texto; reative Autoplay para reiniciar. Uma nova rodada ou renascimento tambem prepara a proxima execucao.
+
+IMPLEMENTACAO
+O bot consulta o mapa e o jogador nativos a cada frame. O parser extrai cinco simbolos adicionais: objeto do codigo, valor do codigo, inversao, largura e metodo de posicionamento. Se esses simbolos mudarem e nao puderem ser resolvidos, somente o bot fica indisponivel; as demais funcoes continuam disponiveis.
+A reproducao aplica posicoes, velocidades, movimento, salto e agachamento usando o corpo de fisica e os metodos do proprio jogador. Converte corretamente os inteiros sem sinal usados nas gravacoes antigas. Aceita os dois formatos de marcadores de queijo/toca existentes na base. O jogo realiza a coleta e a entrada na toca pelas suas verificacoes nativas de colisao; esta versao nao envia pacotes artificiais de vitoria. Emotes cosmeticos das gravacoes nao sao reproduzidos, mas seus intervalos sao mantidos.
+O leitor de sockets e os temporizadores originais continuam preservados. A captura antiga nao foi reativada. O diagnostico de conexao permanece em logs-client/flash-diagnostics.jsonl.
+
+LIMITES
+Este recurso reproduz rotas salvas, nao descobre caminhos em mapas desconhecidos. Uma rota antiga pode divergir da fisica ou do mapa atual. Gravacao de outros jogadores e PREVIEW antigos ainda precisam de adaptacao; esta entrega restaura a execucao automatica das rotas existentes.
+O bot usa os intervalos gravados e limita os passos por frame. Se o Flash ficar muito atrasado, ele interrompe a execucao e informa o motivo, em vez de executar uma sequencia inteira acumulada.
+
+VALIDACAO
+Codigo compilado para AVM2; o bytecode confirma que somente swf_loaded mudou entre os metodos anteriores. loop_game, ConnectionGuard e os demais metodos existentes continuam identicos. Os dois blocos antigos de rede/timer continuam inalcançaveis.
+Testes de reproducao foram executados com o codigo ActionScript real em Ruffle, usando objetos de jogo simulados. O parser resolveu os cinco simbolos nas duas SWFs de referencia fornecidas.
+Nao foi realizado teste no Adobe Flash/Windows nem contra o servidor oficial. O teste confirma a logica do bot, nao a aceitacao das rotas ou das colisoes no servidor. Caso o rato siga a rota mas nao recolha queijo/entre na toca, informe o codigo do mapa e o status exibido para investigar essa compatibilidade.

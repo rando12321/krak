@@ -1,0 +1,20 @@
+CORRECAO DE "connection limit exceeded"
+
+Essa mensagem e produzida por DisneyClient/database.py na autenticacao da key. As sessoes expiram apos ate 3 horas e nao representam sockets Flash abertos. Repetir login gerava novas linhas; o codigo anterior contava essas linhas de outros IPs, podendo esgotar o limite mesmo com apenas um endereco diferente. A troca entre localhost e IP publico tambem pode deixar sessoes em enderecos distintos. Sem acesso ao banco da VPS, nao e possivel confirmar quais sessoes causaram este caso.
+
+Correcao: contar IPs ativos distintos por usuario; permitir reconectar um IP ja presente; manter o bloqueio para um IP novo quando o limite configurado esta cheio. Mantem validade, bloqueio da key, limite de ativacoes e connection_limit. Adiciona o comando administrativo clear-key-sessions, autenticado pela senha administrativa existente.
+
+INSTALACAO NA VPS
+1. Feche o iniciador antigo. Substitua DisneyClient/database.py, DisneyClient/admin.py e DisneyClient/BUILD-ID.txt pelos deste pacote. Preserve DisneyClient/.env e o banco. O Follow v13 e seu IP 207.180.3.127 nao foram alterados.
+2. No terminal, dentro de DisneyClient, identifique o ID numerico da key:
+   python admin.py list-keys
+   O comando solicita a senha administrativa configurada em ADMIN_PASSWORD_HASH. Nao e a key de acesso do client.
+3. Para encerrar as sessoes da key afetada:
+   python admin.py clear-key-sessions --id 123
+   Substitua 123 pelo ID correto. Todos os logins/sessoes dessa key serao invalidados; ela continuara ativa e suas ativacoes de dispositivo serao preservadas. Outros IDs nao sao apagados.
+4. Abra INICIAR_CLIENT.bat, autentique novamente e gere uma URL nova. O reinicio tambem limpa o bloqueio temporario em memoria causado por tentativas repetidas.
+
+Se nao souber a senha administrativa, use o procedimento de administracao existente da sua VPS; nao envie senha, .env ou key no chat. A simples troca da SWF nao corrige este erro de backend.
+
+VERIFICACAO
+10 testes do codigo real de autenticacao/administracao usando um adaptador SQLite para fixtures SQL (nao um servidor MySQL/MariaDB). Cobrem logins duplicados, reconexao no limite, bloqueio de IP adicional, sessoes expiradas, limite entre keys do mesmo usuario, key invalida, limite de ativacoes, ordem do lock e limpeza limitada ao ID escolhido. MySQL/MariaDB e dados reais da VPS nao foram testados. Nenhuma sessao da VPS foi apagada e nenhuma implantacao foi feita.

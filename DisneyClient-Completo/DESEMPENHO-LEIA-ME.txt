@@ -1,0 +1,18 @@
+SDDS MENU - DESEMPENHO
+
+Extraia o ZIP completo em uma pasta nova. Feche o Flash e o iniciador anterior.
+Abra INICIAR_CLIENT.bat. Use a URL local gerada no Adobe Flash como antes.
+
+Na aba Jogador:
+- Mostrar ping: mede o tempo entre o comando nativo /ping e uma resposta reconhecida do servidor. Consulta a cada 10 segundos. Se nao houver resposta reconhecida, mostra sem resposta. Nao usa o antigo ping aleatorio.
+- Mostrar FPS: mede os quadros efetivamente recebidos, separado da taxa solicitada.
+- Limitar FPS: solicita uma taxa de 1 a 120 FPS; padrao do campo 60.
+- Acima de 60 FPS: solicita 120 FPS. Este preset e o limite personalizado se desativam mutuamente.
+
+Todos os novos controles iniciam desligados. Ao desligar o ajuste, a taxa original e restaurada.
+O FPS efetivo depende do Flash Player, carga do jogo e computador. Solicitar 120 nao garante obter 120 e nao significa FPS infinito.
+
+Reduzir massa e Velocidade de movimento foram removidos do menu e dos atalhos, com suas rotinas auxiliares de ativacao desanexadas.
+Teleport, RGB MODE, nomes visuais e aba Bot foram preservados.
+
+Validacao: testes AVM2 em Ruffle e verificacao estrutural do loader. O comportamento no Adobe_10.exe e a resposta /ping do servidor precisam ser conferidos no ambiente real.

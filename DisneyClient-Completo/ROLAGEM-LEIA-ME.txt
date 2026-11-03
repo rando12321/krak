@@ -1,0 +1,9 @@
+ROLAGEM V2 — ABA JOGADOR
+
+Mova o cursor sobre a area das opcoes da aba Jogador e use a roda. Nao precisa clicar numa lista nem arrastar uma barra.
+
+A v2 captura a roda no palco Flash pela posicao do cursor, inclusive quando o evento vem do painel sobreposto ou do proprio palco. Remove recortes nativos aninhados e prepara novamente o conteudo quando o menu e reconstruido. A barra lateral antiga continua oculta e sem interacao. A rolagem fica limitada ao topo e ao final das opcoes. Eventos fora da area das opcoes nao sao consumidos; outras abas conservam a rolagem anterior.
+
+Instalacao: feche o iniciador e o Adobe, substitua os arquivos preservando DisneyClient/.env, reinicie INICIAR_CLIENT.bat e gere uma URL nova. A mudanca esta na SWF; uma janela Flash antiga continuara executando a versao anterior. Follow v13, IP da VPS e correcao de sessoes da key foram preservados.
+
+Verificacao: 16 testes simulados AVM2 no Ruffle 0.7.1, incluindo sobreposicoes, cursor fora da area, evento dirigido ao palco, recortes internos, reconstrucao do conteudo, limite topo/fim e ausencia de rolagem dupla. Bytecode de todos os metodos preexistentes preservado exceto o hook inicial que substitui PlayerScrollFix por WheelScrollFixV2. O comportamento no Adobe real ainda precisa ser confirmado. Nenhuma implantacao na VPS foi realizada.

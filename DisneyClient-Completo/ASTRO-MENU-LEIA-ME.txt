@@ -1,0 +1,13 @@
+ASTRO MENU — NOMES E ALINHAMENTO
+
+Botao superior: "Menu" (antes "Menu SDDS").
+Titulo superior: "ASTRO MENU" (antes "Sdds Menu").
+O nome DISNEY no painel interno foi preservado; nao fazia parte das duas trocas solicitadas.
+
+Alinhamento: substituido o seletor nativo preso ao recorte por um seletor que abre acima do painel. Posicoes: Centro, Baixo, Baixo esquerdo, Baixo direito, Esquerda, Direita, Topo, Topo esquerdo e Topo direito. Clicar aplica stage.align e fecha a lista; Centro pode ser selecionado novamente depois das outras posicoes. O botao de selecao foi separado do texto do rotulo.
+
+Instalacao: feche Adobe e iniciador, substitua os arquivos preservando DisneyClient/.env, reinicie INICIAR_CLIENT.bat e gere uma URL nova. Confira "Menu" e "ASTRO MENU" no topo. IP da VPS, Follow v13, correcao da key, rolagem, opcoes nativas e controles de banho/emoji/macro mantidos.
+
+Verificacao: 48 testes simulados AVM2 no Ruffle 0.7.1, incluindo as nove posicoes de alinhamento, retorno ao Centro e os 28 testes anteriores dos ajustes. Compilacao exige encontrar e trocar os dois nomes antigos. Bytecode de metodos preexistentes preservado, exceto a substituicao do hook SettingsControls por SettingsControlsV2. Falta confirmar a interacao no Adobe/servidor real. Nenhuma implantacao na VPS foi realizada.
+
+Fontes atuais: fontes-ajustes/SettingsControlsV2.as, PatchSettingsV2.java e SettingsTestsV2.as. PatchSettingsV2 recebe a SWF da versao anterior com SettingsControls e nomes antigos. Fixture de testes nunca deve substituir a SWF de producao.

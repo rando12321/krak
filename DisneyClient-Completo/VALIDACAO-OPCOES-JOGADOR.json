@@ -1,0 +1,11 @@
+{
+  "checks_passed": 32,
+  "runtime": "Ruffle 0.7.1",
+  "root_cause": "retiring mass/speed rows could remove shared native options container",
+  "high_jump_original_row_and_callback_preserved": true,
+  "wheel_with_restored_options_tested": true,
+  "existing_methods_changed": [
+    "swf_loaded"
+  ],
+  "live_adobe_tested": false
+}

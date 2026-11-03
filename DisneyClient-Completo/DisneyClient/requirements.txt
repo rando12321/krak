@@ -1,0 +1,6 @@
+aiohttp>=3.12.14,<4
+aiofiles>=24.1,<26
+asyncmy>=0.2.10,<0.3
+python-dotenv>=1.0.1,<2
+ujson>=5.10,<6
+cryptography>=44.0.3,<50

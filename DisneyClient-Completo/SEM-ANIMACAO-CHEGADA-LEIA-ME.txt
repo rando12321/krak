@@ -1,0 +1,78 @@
+VERSAO ATUAL: Autoplay por teclado interno do SWF.
+Leia TECLADO-SWF-LEIA-ME.txt. O texto abaixo descreve versoes anteriores.
+
+VERSAO ATUAL: Autoplay por teclado interno do SWF.
+Leia TECLADO-SWF-LEIA-ME.txt. O texto abaixo descreve versoes anteriores.
+
+VERSAO ATUAL: Autoplay por teclado interno do SWF.
+Leia TECLADO-SWF-LEIA-ME.txt. O texto abaixo descreve versoes anteriores.
+
+CLIENTE SEM ANIMACOES ADICIONADAS / CONFIRMACAO NATIVA DA TOCA
+
+INSTALAR
+Feche o Flash e o iniciador anterior. Extraia todo o ZIP em uma pasta nova
+e abra INICIAR_CLIENT.bat. Login e DisneyParser incluidos.
+Se usa a VPS, substitua tambem o arquivo servido por ela:
+DisneyClient/public/ChargeurTransformice.swf
+Depois reabra o Flash para carregar o SWF atualizado.
+
+ANIMACOES REMOVIDAS
+Foi retirada a camada extra de animacao: nao chama funcoes visuais de
+corrida, salto, parada ou agachamento, nao altera escala/orientacao e nao
+comanda play/stop/gotoAndPlay/gotoAndStop do avatar.
+O movimento continua aplicando posicao e velocidade gravadas, pelo mesmo
+relogio acumulado. Nao emite teclas sintetizadas.
+O desenho e a animacao normais do proprio jogo permanecem sob controle
+do processamento nativo, inclusive ao receber uma vitoria real.
+
+CORRECAO DA CONFIRMACAO - INDEPENDENTE DE ROTA
+Foi encontrado um filtro no MainTimeline.handle_packet que, com No Delay
+ativado e ordem de chegada repetida, podia descartar o pacote real de
+vitoria do jogador local em vez de entrega-lo ao jogo.
+O handler original foi preservado integralmente em um metodo alias. Um
+adaptador chama esse mesmo handler com o pacote e canal originais.
+Somente durante uma confirmacao real de vitoria do proprio jogador, o
+filtro de duplicidade do No Delay fica suspenso. A configuracao original
+e restaurada por finally, inclusive se o processamento nativo gerar erro.
+Ordem e tempo nativos da vitoria real atualizam o controle de duplicidade,
+para evitar reaplicar uma chegada prevista localmente.
+A correcao funciona tambem com Autoplay desligado e sem rota carregada.
+Nao altera rotas, marcadores de toca, temporizacao ou catalogo de mapas.
+Nao gera solicitacoes artificiais de queijo/entrada para forcar chegada.
+As respostas recebidas seguem para o processamento original. Se o
+servidor confirmar morte, o cliente nao a transforma em vitoria.
+Depois de um resultado real do servidor, o Autoplay para de sobrescrever
+os dados do personagem ate o renascimento ou nova rodada.
+
+DIAGNOSTICO
+Menu > Bot > AUTOPLAY / DIAGNOSTICO LOCAL - HISTORICO DA SESSAO.
+A linha Servidor distingue:
+- servidor confirmou VITORIA
+- servidor confirmou MORTE
+- servidor confirmou RENASCIMENTO
+O log registra servidor.vitoria/servidor.morte RECEBIDO e, quando o filtro
+corrigido estava ativo, vitoria.NoDelay PROTEGIDA.
+Se ainda aparecer morte no jogo, envie o log atual com essa linha. Ela
+permite distinguir um descarte no cliente de uma morte enviada pelo
+servidor. O pacote enviado nao permite garantir a causa de toda morte.
+O historico integral, rolagem, Inicio/Fim, Copiar tudo e congelamento com
+a linha literal disconnect permanecem disponiveis.
+
+VALIDACAO
+56 assercoes AVM2 em Ruffle. O teste reproduz o filtro de ordem duplicada
+antes da correcao e verifica o encaminhamento da vitoria verdadeira.
+Inclui Autoplay desligado/sem rota, avatar inativo, outros jogadores,
+preservacao do pacote/cursor/canal, restauracao de No Delay apos erro,
+ordem/tempo nativos, renascimento, morte distinta de vitoria, ausencia de
+animacoes adicionadas e de eventos de teclado sintetizados.
+O wrapper de MainTimeline foi executado no AVM2 com um alias de teste.
+Na producao, verificacao estatica garante que o handler nativo copiado
+permanece byte a byte identico ao original. Apenas swf_loaded, o wrapper
+de handle_packet e as tres protecoes de reproducao duplicada mudaram
+entre os metodos originais. Stack/scope validados.
+32 rotas decodificadas e 58 snapshots/63 passos do mapa @2294519 mantidos.
+Nao houve partida real nem conexao com seu servidor nesta montagem Linux.
+
+BASE
+juninhpsx/krakitos, commit 9e48ebbae5820706ff7ae3e7690752bf65ba8515,
+DisneyClient-Follow.zip. Fontes e testes em fontes-correcao-bot1069.

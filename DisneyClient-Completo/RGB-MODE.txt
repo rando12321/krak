@@ -1,0 +1,1 @@
+RGB MODE v4: aba Jogador, final da lista. Controle circular com ponto central quando ativo, mesmo estilo das demais opcoes. Comeca desligado. Diagnostico permanece na barra inferior. Efeito visual local.

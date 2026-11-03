@@ -1,0 +1,22 @@
+TEXTO AMARELO NO JOGO
+
+Texto exato: Sdds CHEATS start
+Cor: amarelo #FFFF00, negrito, tamanho 18.
+Posicao: topo central da janela do jogo, com sombra para legibilidade.
+
+O texto e uma sobreposicao local. Aparece quando a SWF do jogo termina de carregar, antes da construcao do menu, e permanece visivel durante a sessao. A posicao se ajusta ao redimensionar a janela. Nao envia mensagem ao chat nem altera dados do servidor.
+
+COMO INICIAR
+Feche a instalacao anterior, extraia todo este ZIP e abra somente INICIAR_CLIENT.bat dentro de DisneyClient-Completo. Autentique sua key no localhost e cole o link local gerado no Adobe Flash Player, como voce ja fazia. Mantenha MySQL/XAMPP ligado e Python 3.11+ instalado.
+Se o .bat for aberto sozinho, ele tenta localizar este ZIP com o nome DisneyClient-Sdds-start.zip na pasta Downloads e extrair automaticamente. Nao pede para selecionar pastas.
+
+REFERENCIAS EXAMINADAS
+TFMClient-main: usa Loader.contentLoaderInfo/Event.COMPLETE para obter o conteudo e o dominio da SWF carregada. Foi utilizado esse ponto do ciclo de carregamento como referencia; o caminho local fixo da base nao foi incorporado.
+tfm-client-master: hospeda o jogo em controle Flash ActiveX no Windows e integra eventos FlashCall. Esse executavel antigo nao foi executado nem incorporado; a inicializacao standalone atual foi mantida.
+
+O menu de visual novo continua integrado. As AoBs novas nao foram aplicadas nesta edicao: este trabalho prioriza a marca de inicio pedida por voce.
+
+VERIFICACAO
+Compilacao da classe StartMarker e verificacao estatica do gancho em swf_loaded, do texto exato e dos limites de pilha/escopo. Os demais metodos ja existentes do loader foram preservados em relacao a versao de visual novo. Integridade e conteudo do ZIP foram verificados.
+Windows/Flash/AIR, a extracao por PowerShell e o login no servidor oficial nao foram executados neste ambiente.
+A janela enviada se identifica como Flash Player 10. O loader usa formato SWF 12 e o jogo de exemplo usa SWF 14; um Player 10 antigo pode nao ser compativel. A versao completa do executavel nao foi identificada pela imagem.
