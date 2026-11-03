@@ -1,6 +1,6 @@
 Executed 2026-11-03: Java 21, FFDec 26.4.0, Ruffle 0.7.1, Playwright + Chromium.
-PASS: 177 AVM2 native-keyboard/victory/clock/log assertions; 32 routes decoded; victory independent of route
-PASS: 788 pre-existing method bodies outside RoutePlayerFixed1069 unchanged; 51 helper bodies verified
+PASS: 190 AVM2 native-keyboard/victory/clock/log assertions; 32 routes decoded; victory independent of route
+PASS: 788 pre-existing method bodies outside RoutePlayerFixed1069 unchanged; 52 helper bodies verified
 PASS: full rebuild_precision.sh compilation, verification and runtime test workflow
 
 Workflow changed at user request: recorded time and input drive playback;
@@ -32,3 +32,19 @@ stable inference across frames, native metadata preserved, central ambiguity,
 late/missing/out-of-range evidence fallback and reset on reactivation. Input
 mapping is shared by apply and velocity feedback to avoid double inversion.
 14 additional assertions; no live-map reproduction was available.
+
+Dense-timing fix: consume due unchanged snapshots without adding one rendered
+frame per snapshot. Explicit zero-delta commands preserve same-frame order.
+Repeated input snapshots do not repress keys or reset active speed modulation.
+Positive-duration input transitions remain bounded to one per frame; completion
+also counts as a transition to protect the final hold. Work is capped at 64
+samples per frame with every remaining sample retained for continuation.
+The old assertion requiring 10ms unchanged samples to take one 40ms frame each
+was replaced with recorded-deadline checks, reflecting the requested timing fix.
+
+Additional scenarios exercise simultaneous movement/crouch/jump, dense samples
+before a turn, final release timing, bounded 130-sample continuation, and dense
+clock playback with 16/33/50ms frames. Nine speed-model scenarios use 30/60/120px/s
+references at those frame intervals; each asserts average-speed error below
+max(25px/s, 40% of reference), no unexpected reverse/jump, and no position writes.
+These model tolerances are not real-game measurements or an error-zero claim.

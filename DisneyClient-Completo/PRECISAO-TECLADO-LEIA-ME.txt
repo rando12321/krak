@@ -48,10 +48,21 @@ Leitura e controle:
 - Sem dados válidos de velocidade, segue as teclas gravadas, sem bloquear.
 - A ausência de coordenadas opcionais também não bloqueia os comandos.
 
-Relógio:
-Pequenos atrasos de quadro preservam a fase gravada, sem somar arredondamento
-em cada passo. Atrasos maiores reiniciam o próximo intervalo, sem executar vários
-comandos no mesmo quadro. O controle de velocidade não altera os prazos da rota.
+Relógio e amostras densas:
+- Amostras que não mudam as teclas são consumidas no prazo gravado, sem exigir
+  um quadro extra por amostra. Isso evita multiplicar a duração de rotas densas.
+- Amostras repetidas atualizam a referência de velocidade sem reapertar a tecla
+  e sem reiniciar a modulação já ativa.
+- Comandos com intervalo explicitamente zero executam na ordem, no mesmo quadro,
+  incluindo salto e agachamento simultâneos.
+- Transições com intervalo positivo são limitadas a uma por quadro para não
+  esmagar o tempo de uma tecla recém-pressionada durante a recuperação de atraso.
+- A conclusão da rota também é tratada como transição: soltar as teclas não pode
+  apagar o intervalo que deveria manter o último movimento.
+- O processamento de amostras fica limitado a 64 por quadro; as demais continuam
+  no quadro seguinte, sem descarte e sem loop sem limite.
+- Pequenos atrasos normais preservam a fase; atrasos grandes entre transições
+  ativas reiniciam o próximo intervalo sem rajada de viradas/saltos.
 Controle manual, chat, perda de foco, desconexão, morte e vitória mantêm os fluxos
 existentes de interrupção/liberação de teclas.
 
@@ -63,14 +74,18 @@ mas não pode impor uma velocidade exata nem corrigir fisicamente uma colisão.
 Os testes locais não garantem erro zero no servidor ou na física real.
 
 Validação atual:
-- 177 verificações AVM2 executadas no SWF com Ruffle e Chromium.
+- 190 verificações AVM2 executadas no SWF com Ruffle e Chromium.
 - 32 rotas decodificadas e cenário legado de 63 comandos.
+- Rotas densas verificadas com quadros de 16, 33 e 50 ms, comandos simultâneos,
+  virada após amostras repetidas e continuação limitada de 130 amostras.
+- Nove cenários adicionais de velocidade: referências de 30, 60 e 120 px/s com
+  cada um dos três intervalos de quadro acima, em física simulada.
 - Modelo de aceleração/atrito confirma redução do excesso de velocidade com
   entrada de teclado, sem escrita física nem retorno de direção.
 - Conversão assinada, espelhamento, leitura nativa e fallback, voo, salto,
   soltura, ordem, tempo, foco e fluxo de vitória/desconexão exercitados.
 - 788 corpos de métodos anteriores ao helper preservados byte a byte.
-- Limites de pilha/escopo de 51 corpos do helper verificados.
+- Limites de pilha/escopo de 52 corpos do helper verificados.
 - ZIP e manifesto SHA-256 verificados.
 Não houve teste em Windows nem conexão ao servidor do jogo.
 

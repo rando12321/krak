@@ -613,15 +613,21 @@ package disney {
             measuredVy=validPositions && sampleMs>0 && sampleMs<=250 ? (currentPosition.y-previousPosition.y)*1000/sampleMs : 0;
             velocitySampleValid=validPositions && sampleMs>0 && sampleMs<=250;
             lastPosition=currentPosition;lastPositionAt=now;
-            // Exactly one command per ENTER_FRAME, including zero-delta samples.
-            // Normal frame jitter preserves phase; large stalls rebase safely.
-            if (running && now>=due) {
+            // Consume dense unchanged samples on the recorded clock, not one
+            // frame per sample. Emit at most one timed input transition/frame;
+            // explicit zero-delta commands retain their recorded same-frame order.
+            var processed:int=0;var timedTransitions:int=0;
+            while (running && now>=due && processed<64) {
+                var inputChanged:Boolean=changesInput(sequence[index]);
+                if(inputChanged && timedTransitions>0 && Number(sequence[index][2])>0)break;
+                if(inputChanged)timedTransitions++;
+                processed++;
                 if(now-due>750){
                     diagnosticFrame=true;diagnostic("relogio","CONTINUAR","atraso="+Math.round(now-due)+"ms; executar um comando e preservar o proximo intervalo");
                 }
                 diagnosticFrame=true;
                 diagnostic("apply","ANTES","passo="+index+" acao="+sequence[index][1]+" atraso="+Math.max(0,now-due)+"ms intervalo="+Number(sequence[index][2])+"ms mantido="+(now-lastAppliedAt)+"ms gravadoTotal="+expectedElapsed+"ms decorrido="+(now-routeStartedAt)+"ms atual="+currentPosition.x.toFixed(1)+","+currentPosition.y.toFixed(1));
-                apply(sequence[index]);lastAppliedAt=now;lastFeedbackAt=now;velocityCoasting=false;index++;
+                apply(sequence[index]);lastAppliedAt=now;if(inputChanged){lastFeedbackAt=now;velocityCoasting=false;}index++;
                 diagnostic("apply","DEPOIS","passos="+index+"/"+sequence.length);
                 if (index>=sequence.length) {
                     completed=true;running=false;release();diagnostic("concluirRota","DEPOIS","todos os passos executados");
@@ -631,7 +637,11 @@ package disney {
                     var frameLateness:Number=Math.max(0,now-due);
                     // Keep the recorded phase across normal frame quantization.
                     // Large stalls rebase instead of compressing commands into a burst.
-                    var retainPhase:Boolean=frameLateness<=50 && frameLateness<=nextInterval/2;
+                    var nextChanges:Boolean=changesInput(sequence[index]);
+                    var retainPhase:Boolean=nextInterval==0 || !nextChanges || (!inputChanged && timedTransitions==0) || (frameLateness<=50 && frameLateness<=nextInterval/2);
+                    // Catching up passive samples must not erase the hold of a
+                    // key transition actually emitted in this frame.
+                    if(nextChanges && nextInterval>0 && inputChanged && due+nextInterval<=now)retainPhase=false;
                     due=retainPhase ? due+nextInterval : lastAppliedAt+nextInterval;
                     diagnostic("relogio.teclado","AGENDADO","intervalo="+nextInterval+"ms atrasoQuadro="+frameLateness+"ms fasePreservada="+retainPhase+" proximo="+due+"ms");
                 }
@@ -639,11 +649,20 @@ package disney {
             if(running)synchronizeMotion(currentPosition,now);
             status(running ? "Bot: reproduzindo "+code+" | "+index+"/"+sequence.length : "Bot: comandos da rota finalizados | "+code,now);
         }
+        private function changesInput(step:Array):Boolean {
+            // Completing releases all owned keys and is a real input transition.
+            if(sequence!=null && step===sequence[sequence.length-1])return true;
+            var action:String=String(step[1]);
+            if(action=="walk")return previousWalk==null || Boolean(previousWalk.ml)!=Boolean(step[0].ml) || Boolean(previousWalk.mr)!=Boolean(step[0].mr) || Boolean(previousWalk.jump)!=Boolean(step[0].jump);
+            if(action=="crouch" || action=="duck")return Boolean(heldKeys[40])!=(Number(step[0])!=0);
+            return false;
+        }
         private function apply(step:Array):void {
             var action:String=String(step[1]);
             if(action=="walk"){
                 var point:Object=step[0];var input:Object=routeInput(point);
-                movement(Boolean(input.left),Boolean(input.right),Boolean(point.jump));previousWalk=point;
+                if(changesInput(step))movement(Boolean(input.left),Boolean(input.right),Boolean(point.jump));
+                previousWalk=point;
             }else if(action=="crouch" || action=="duck")setKey(40,Number(step[0])!=0);
             // Cheese/hole markers consume time only. Real movement and native
             // game processing handle collection and server-confirmed arrival.
