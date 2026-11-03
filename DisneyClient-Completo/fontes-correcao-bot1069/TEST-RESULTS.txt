@@ -1,10 +1,15 @@
 Executed 2026-11-03: Java 21, FFDec 26.4.0, Ruffle 0.7.1, Playwright + Chromium.
-PASS: 95 AVM2 native-keyboard/victory/clock/log assertions; 32 routes decoded; victory independent of route
-PASS: 787 pre-existing method bodies outside RoutePlayerFixed1069 unchanged; 49 helper bodies verified
-PASS: all SWF tags identical except the modified DoABC2 code tag
+PASS: 107 AVM2 native-keyboard/victory/clock/log assertions; 32 routes decoded; victory independent of route
+PASS: 788 pre-existing method bodies outside RoutePlayerFixed1069 unchanged; 48 helper bodies verified
 PASS: full rebuild_precision.sh compilation, verification and runtime test workflow
 
-New regressions: precise direction transition, approach coasting without early
+Additional sequence/time regressions: pre-deadline arrival retained without
+an early transition, confirmation isolated to its command, wrong-height overshoot
+and mirrored overshoot pause without backward steering, recorded held jump
+preserved, stale arrival rejected, long observation gap rejected, takeoff and
+jump release remain ordered and receive the full recorded hold.
+
+Precision regressions: precise direction transition, approach coasting without early
 reversal, pending transition retained until arrival, no invented jump for height
 alone, recorded recovery takeoff, one recovery takeoff per waypoint, no repeated
 jump on arrival after recovery, tighter same-state sample acceptance.

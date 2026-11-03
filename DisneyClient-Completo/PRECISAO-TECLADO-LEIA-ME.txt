@@ -2,7 +2,17 @@ Precisão do teclado — 2026-11-03
 
 Atualização aplicada aos fontes e ao ChargeurTransformice.swf do pacote recebido.
 
-Mudanças:
+Correção adicional de sequência e tempo:
+- Observa o ponto pendente em todos os quadros, mesmo antes do prazo.
+- Guarda cruzamentos confirmados por até 120 ms, sem antecipar o comando.
+- A confirmação é exclusiva do passo atual e é apagada ao avançar.
+- Intervalos sem observação acima de 250 ms não comprovam cruzamento.
+- Se ultrapassar o ponto sem confirmação válida, pausa sem voltar nem saltar
+  passos. É necessário reativar para reiniciar; o bot não teleporta o jogador.
+- Mantém o salto já pressionado no trecho enquanto aguarda sincronização.
+- Preserva a ordem e o intervalo completo dos comandos, sem comprimir atrasos.
+
+Mudanças anteriores mantidas:
 - Tolerância nas mudanças de direção/salto: 2,5 px em X e 4 px em Y.
 - Amostras que mantêm os comandos: 5 px em X e 7 px em Y.
 - Cruzamento entre quadros calculado em uma elipse normalizada; movimento
@@ -14,10 +24,10 @@ Mudanças:
 - Diagnóstico inclui tolerâncias, velocidade observada e horizonte de previsão.
 
 Validação desta atualização:
-- 95 verificações AVM2 executadas no SWF compilado com Ruffle e Chromium.
+- 107 verificações AVM2 executadas no SWF compilado com Ruffle e Chromium.
 - 32 rotas decodificadas; cenário legado de 63 comandos preservado.
-- 787 corpos de métodos fora de RoutePlayerFixed1069 mantidos byte a byte.
-- Limites de pilha/escopo de 49 corpos do helper verificados.
+- 788 corpos de métodos fora de RoutePlayerFixed1069 mantidos byte a byte.
+- Limites de pilha/escopo de 48 corpos do helper verificados.
 - Todos os demais tags SWF preservados byte a byte.
 - Demais arquivos originais preservados, exceto fontes/testes alterados,
   identificação da versão, resultados e manifesto de hashes.
