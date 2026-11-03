@@ -1,18 +1,19 @@
 Executed 2026-11-03: Java 21, FFDec 26.4.0, Ruffle 0.7.1, Playwright + Chromium.
-PASS: 107 AVM2 native-keyboard/victory/clock/log assertions; 32 routes decoded; victory independent of route
+PASS: 113 AVM2 native-keyboard/victory/clock/log assertions; 32 routes decoded; victory independent of route
 PASS: 788 pre-existing method bodies outside RoutePlayerFixed1069 unchanged; 48 helper bodies verified
 PASS: full rebuild_precision.sh compilation, verification and runtime test workflow
 
-Additional sequence/time regressions: pre-deadline arrival retained without
-an early transition, confirmation isolated to its command, wrong-height overshoot
-and mirrored overshoot pause without backward steering, recorded held jump
-preserved, stale arrival rejected, long observation gap rejected, takeoff and
-jump release remain ordered and receive the full recorded hold.
+Current behavior: route deviations and large clock stalls continue instead of
+pausing. Unconfirmed overshoots follow the recorded command without invented
+reverse steering. Bounded recovery eventually continues even when blocked.
+Small frame lateness preserves recorded phase; large stalls rebase the next
+interval, executing at most one command per frame without a backlog burst.
+The earlier assertions requiring automatic pauses or accumulation of all frame
+lateness were updated to the user's requested continuation/timing behavior.
 
-Precision regressions: precise direction transition, approach coasting without early
-reversal, pending transition retained until arrival, no invented jump for height
-alone, recorded recovery takeoff, one recovery takeoff per waypoint, no repeated
-jump on arrival after recovery, tighter same-state sample acceptance.
-Existing keyboard, native victory, clock, log, spatial synchronization, mirroring,
-32 decoded routes and 63-command recorded trajectory checks remain included.
+Regressions cover 33ms frames with 100ms commands completing at recorded total
+time, overshoot and mirrored continuation, no unrecorded reverse, blocked
+continuation, pre-deadline crossing retention without early input, confirmation
+isolated per command, recorded jump hold and release, no invented/repeated jump,
+native victory, manual focus/input interruption, disconnect release and logging.
 No live-server gameplay or Windows validation. Test physics is simulated.

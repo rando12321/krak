@@ -248,17 +248,17 @@ package disney {
             // An unconfirmed overshoot must not manufacture a return movement.
             // Only a recorded direction change may reverse the held direction.
             if(approach!=0 && dx*approach < -margin.x){
-                release();running=false;paused=true;
-                pauseReason="Bot: ponto ultrapassado no passo "+index+" | pausado sem voltar ou pular passos | reative para reiniciar";
-                diagnosticFrame=true;diagnostic("sincronizar","PAUSADO",pauseReason);status(pauseReason,now);return false;
+                syncStarted=-1;syncBest=Number.POSITIVE_INFINITY;
+                diagnosticFrame=true;diagnostic("sincronizar","CONTINUAR","passo="+index+" ponto ultrapassado; seguir comando gravado sem retorno corretivo");
+                return true;
             }
             var distance:Number=Math.sqrt(dx*dx+dy*dy);
             if(syncStarted<0){syncStarted=now;syncProgressAt=now;syncBest=distance;syncLogAt=-1000;}
             if(distance<syncBest-2){syncBest=distance;syncProgressAt=now;}
             if(now-syncProgressAt>1500 || now-syncStarted>5000){
-                release();running=false;paused=true;
-                pauseReason="Bot: fora da rota no passo "+index+" | ponto nao alcancado; nenhum passo pulado | reative para reiniciar";
-                diagnosticFrame=true;diagnostic("sincronizar","PAUSADO","erro="+distance.toFixed(1)+"px sem progresso="+(now-syncProgressAt)+"ms");status(pauseReason,now);return false;
+                syncStarted=-1;syncBest=Number.POSITIVE_INFINITY;
+                diagnosticFrame=true;diagnostic("sincronizar","CONTINUAR","passo="+index+" erro="+distance.toFixed(1)+"px; limite de recuperacao atingido; seguir sem pausa");
+                return true;
             }
             // Read position only. Corrections still use the native keyboard path.
             var airborne:Boolean=Boolean(safeRead(player,safeRead(keys,"is_jumping")));
@@ -266,7 +266,7 @@ package disney {
             if(dx*measuredVx>0 && Math.abs(dx)>margin.x){
                 steering=dx-measuredVx*predictionMs/1000;
                 // Coast if the next observed frame should cross the target.
-                // Reverse only after an actual overshoot, not on prediction alone.
+                // Do not reverse based on prediction; overshoots follow the recorded command.
                 if(steering*dx<0)steering=0;
             }
             var deadZone:Number=Math.min(2,margin.x/2);
@@ -612,9 +612,7 @@ package disney {
             // Next hold starts after actual dispatch, never from an overdue clock.
             if (running && now>=due) {
                 if(syncStarted<0 && now-due>750){
-                    release();paused=true;
-                    pauseReason="Bot: atraso de "+Math.round(now-due)+"ms | relogio pausado sem pular passos | reative para reiniciar";
-                    diagnostic("relogio","PAUSADO",pauseReason);status(pauseReason,now);return;
+                    diagnosticFrame=true;diagnostic("relogio","CONTINUAR","atraso="+Math.round(now-due)+"ms; executar um comando e preservar o proximo intervalo");
                 }
                 if(!synchronize(sequence[index],currentPosition,previousPosition,now))return;
                 diagnosticFrame=true;
@@ -625,8 +623,13 @@ package disney {
                     completed=true;running=false;release();diagnostic("concluirRota","DEPOIS","todos os passos executados");
                 } else {
                     var nextInterval:Number=Number(sequence[index][2]);
-                    expectedElapsed+=nextInterval;due=lastAppliedAt+nextInterval;
-                    diagnostic("relogio.teclado","AGENDADO","intervalo="+nextInterval+"ms a partir da execucao real; proximo="+due+"ms");
+                    expectedElapsed+=nextInterval;
+                    var frameLateness:Number=Math.max(0,now-due);
+                    // Keep the recorded phase across normal frame quantization.
+                    // Large stalls rebase instead of compressing commands into a burst.
+                    var retainPhase:Boolean=frameLateness<=50 && frameLateness<=nextInterval/2;
+                    due=retainPhase ? due+nextInterval : lastAppliedAt+nextInterval;
+                    diagnostic("relogio.teclado","AGENDADO","intervalo="+nextInterval+"ms atrasoQuadro="+frameLateness+"ms fasePreservada="+retainPhase+" proximo="+due+"ms");
                 }
             }
             status(running ? "Bot: reproduzindo "+code+" | "+index+"/"+sequence.length : "Bot: comandos da rota finalizados | "+code,now);

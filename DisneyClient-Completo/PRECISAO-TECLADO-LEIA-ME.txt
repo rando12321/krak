@@ -1,52 +1,60 @@
-Precisão do teclado — 2026-11-03
+Precisão, sequência e relógio do teclado — 2026-11-03
 
-Atualização aplicada aos fontes e ao ChargeurTransformice.swf do pacote recebido.
+Atualização aplicada aos fontes e ao ChargeurTransformice.swf.
 
-Correção adicional de sequência e tempo:
-- Observa o ponto pendente em todos os quadros, mesmo antes do prazo.
-- Guarda cruzamentos confirmados por até 120 ms, sem antecipar o comando.
-- A confirmação é exclusiva do passo atual e é apagada ao avançar.
-- Intervalos sem observação acima de 250 ms não comprovam cruzamento.
-- Se ultrapassar o ponto sem confirmação válida, pausa sem voltar nem saltar
-  passos. É necessário reativar para reiniciar; o bot não teleporta o jogador.
-- Mantém o salto já pressionado no trecho enquanto aguarda sincronização.
-- Preserva a ordem e o intervalo completo dos comandos, sem comprimir atrasos.
+Comportamento:
+- Pequenas variações entre quadros preservam os prazos gravados, evitando
+  acumular o arredondamento de cada quadro em todos os próximos comandos.
+- A correção de fase vale para atraso de até 50 ms e até metade do próximo
+  intervalo. Atrasos maiores reiniciam a referência do próximo intervalo;
+  não há execução de vários comandos no mesmo quadro para compensar.
+- Não há pausa automática por atraso do relógio, ponto ultrapassado ou limite
+  de recuperação. O bot continua os comandos na ordem gravada.
+- Ao ultrapassar um ponto, segue o comando gravado; não inventa movimento
+  de retorno para buscar o ponto. Viradas gravadas continuam funcionando.
+- A recuperação tenta alcançar pontos ainda à frente. Após 1500 ms sem
+  progresso ou 5000 ms de recuperação, segue o comando sem pedir reativação.
+- Observa o ponto pendente em todos os quadros, inclusive antes do prazo.
+  Cruzamentos confirmados ficam válidos por até 120 ms apenas para esse passo.
+- Intervalos de observação maiores que 250 ms não comprovam cruzamento.
+- Mantém um salto gravado já pressionado durante a sincronização.
+- Tolerâncias: mudanças de direção/salto usam 2,5 px em X e 4 px em Y;
+  amostras que mantêm os comandos usam 5 px em X e 7 px em Y.
+- Cruzamento usa uma elipse normalizada para preservar a precisão vertical.
+- Velocidade observada e previsão de até 50 ms reduzem ultrapassagens.
+- Altura do alvo sozinha não inventa salto; recuperação só usa decolagens
+  gravadas e não repete o salto na chegada ao mesmo ponto.
+- Diagnóstico distingue chegada confirmada de continuação sem confirmação.
 
-Mudanças anteriores mantidas:
-- Tolerância nas mudanças de direção/salto: 2,5 px em X e 4 px em Y.
-- Amostras que mantêm os comandos: 5 px em X e 7 px em Y.
-- Cruzamento entre quadros calculado em uma elipse normalizada; movimento
-  horizontal grande não permite aceitar o ponto na altura errada.
-- Velocidade horizontal observada e previsão de até 50 ms para soltar a direção
-  antes de ultrapassar o alvo. A previsão não inverte a direção antecipadamente.
-- Um alvo mais alto sozinho não dispara salto. A recuperação permite apenas
-  decolagens registradas, uma vez por ponto, sem repetir o salto na chegada.
-- Diagnóstico inclui tolerâncias, velocidade observada e horizonte de previsão.
+Quando o ponto não é alcançável, continuar prioriza a sequência gravada;
+continuar não comprova que o jogador passou pela coordenada exata.
+Controle manual, campo de texto e perda de foco ainda interrompem a entrada
+sintética. Desconexão, morte e vitória continuam tratados pelo fluxo nativo.
 
-Validação desta atualização:
-- 107 verificações AVM2 executadas no SWF compilado com Ruffle e Chromium.
+Validação:
+- 113 verificações AVM2 executadas no SWF com Ruffle e Chromium.
 - 32 rotas decodificadas; cenário legado de 63 comandos preservado.
-- 788 corpos de métodos fora de RoutePlayerFixed1069 mantidos byte a byte.
+- 788 corpos de métodos anteriores ao helper preservados byte a byte.
 - Limites de pilha/escopo de 48 corpos do helper verificados.
-- Todos os demais tags SWF preservados byte a byte.
-- Demais arquivos originais preservados, exceto fontes/testes alterados,
-  identificação da versão, resultados e manifesto de hashes.
+- Teste de quadros de 33 ms e comandos de 100 ms conclui no prazo gravado,
+  sem somar o atraso de arredondamento em cada comando.
+- ZIP e manifesto SHA-256 verificados.
 
-Esses testes usam objetos e física simulados. Não houve teste em Windows nem
-conexão ao servidor do jogo. A precisão na física real precisa ser conferida.
+Testes usam objetos e física simulados. Não houve teste em Windows nem conexão
+ ao servidor do jogo. Não há garantia de erro zero na física real.
 
 Para recompilar e testar:
 Requisitos: Java 21, FFDec 26.4.0, Node.js, Playwright, Chromium,
 @ruffle-rs/ruffle 0.7.1. Preserve a verificação TLS ao obter ferramentas.
-O SWF de entrada deve já conter disney.RoutePlayerFixed1069 (como neste pacote).
+A entrada deve conter disney.RoutePlayerFixed1069, como neste pacote.
 PatchBot1069.java e VerifyBot1069.java são ferramentas históricas para o SWF
-anterior à instalação do bot; não devem ser reaplicados ao SWF já corrigido.
+anterior à instalação do bot; não reaplicar ao SWF já corrigido.
 
 FFDEC_HOME=/caminho/ffdec \
 RUFFLE_PACKAGE=/caminho/node_modules/@ruffle-rs/ruffle \
 NODE_PATH=/caminho/node_modules \
 bash fontes-correcao-bot1069/rebuild_precision.sh entrada.swf saida.swf
 
-CHROMIUM_PATH pode selecionar outro executável de Chromium.
-O script só copia o SWF de saída após a compilação e todos os testes passarem.
-O SWF de testes usa um handler nativo simulado e não é incluído no cliente final.
+CHROMIUM_PATH seleciona outro executável de Chromium, se necessário.
+A saída só é copiada após compilação e testes passarem.
+O SWF de testes não é incluído no cliente final.
