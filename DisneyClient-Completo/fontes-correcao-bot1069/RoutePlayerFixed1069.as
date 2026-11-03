@@ -1,14 +1,9 @@
-// ActionScript 3 / Flash Player 10.3+ / normal Win32 arrow-key plans with live arrival checks
+// ActionScript 3 / Flash Player 10.3+ / internal SWF arrow-key plans with live arrival checks
 package disney {
     import flash.display.MovieClip;
     import flash.events.Event;
     import flash.events.KeyboardEvent;
     import flash.text.TextField;
-    import flash.net.URLLoader;
-    import flash.net.URLRequest;
-    import flash.net.URLRequestMethod;
-    import flash.events.IOErrorEvent;
-    import flash.events.SecurityErrorEvent;
     import flash.utils.Dictionary;
     import flash.utils.getTimer;
     import flash.utils.ByteArray;
@@ -78,18 +73,7 @@ package disney {
         private var keyboardPlan:Array=[];
         private var taskStartedAt:int=-1;
         private var taskCreatedAt:int=0;
-        private var taskPulse:int=0;
         private var taskPrevious:Object;
-        private var nativeReady:Boolean=false;
-        private var nativeError:Boolean=false;
-        private var nativeDirty:Boolean=true;
-        private var nativePending:URLLoader;
-        private var nativeSentAt:int=-1000;
-        private var nativeSeq:int=0;
-        private var nativePulse:int=0;
-        private var nativeAck:Array=[];
-        private var nativeAckPulse:int=0;
-        private var nativeSession:String="";
         private var missedTargets:int=0;
         private var emittingKey:Boolean=false;
         private var manualKeyHandler:Function;
@@ -116,7 +100,6 @@ package disney {
             if(root.stage){
                 manualKeyHandler=function(event:KeyboardEvent):void{
                     if(emittingKey || !running || !root.stage)return;
-                    if(nativeReady && Boolean(heldKeys[event.keyCode]))return;
                     if(root.stage.focus is TextField && TextField(root.stage.focus).type=="input")return;
                     if(root["auto_play_disable_on_move"] && [37,38,39,40,65,68,83,87].indexOf(event.keyCode)>=0)pause();
                 };
@@ -200,54 +183,22 @@ package disney {
             if(game && game.stage===root.stage)root.stage.focus=game;else root.stage.focus=null;
         }
         private function emitKey(code:uint,down:Boolean):void {
-            // No KeyboardEvent.dispatchEvent: delivery is through Windows SendInput.
-            if(code==38 && down)nativePulse++;
-            nativeDirty=true;
-        }
-        private function desiredKeys():Array {
-            var result:Array=[];for each(var key:int in [37,38,39,40])if(Boolean(heldKeys[key]))result.push(key);return result;
-        }
-        private function acknowledgeKeys(result:Object,pulse:int):void {
-            if(!result || result.success!==true){keyboardFailure(result && result.message ? String(result.message) : "Ponte local de teclado indisponivel");return;}
-            nativeReady=true;nativeAck=result.keys as Array;nativeAckPulse=pulse;
-        }
-        private function keyboardFailure(message:String):void {
-            nativeError=true;nativeReady=false;running=false;release();
-            failure="Bot: "+message+" | use o backend local no Windows e Adobe_10.exe em foco";
-            status(failure,getTimer());
-        }
-        private function flushKeyboard(now:int):void {
-            if(nativeSession=="")nativeSession=String(getTimer())+"-"+String(int(Math.random()*2147483647));
-            if(nativeError && desiredKeys().length==0)return;
-            if(nativePending){
-                if(now-nativeSentAt<300)return;
-                try{nativePending.close();}catch(ignoredClose:Error){}nativePending=null;nativeDirty=true;
-            }
-            if(!nativeDirty && now-nativeSentAt<100)return;
-            if(now-nativeSentAt<20)return;
-            nativeSentAt=now;nativeDirty=false;
-            var state:Object={session:nativeSession,seq:++nativeSeq,keys:desiredKeys(),pulse:nativePulse};
-            var sink:Function=safeRead(root,"native_keyboard_sink") as Function;
-            if(sink!=null){try{acknowledgeKeys(sink(state),int(state.pulse));}catch(mockError:Error){keyboardFailure(mockError.message);}return;}
+            if(!root.stage)throw new Error("palco do teclado indisponivel",2010);
+            var stage:flash.display.Stage=root.stage;
+            var game:flash.display.DisplayObject=root["tfm"] as flash.display.DisplayObject;
+            var target:flash.events.IEventDispatcher=game && game.stage===stage ? game : stage;
+            var previousFocus:flash.display.InteractiveObject=stage.focus;
+            var manualFlag:Boolean=Boolean(root["auto_play_disable_on_move"]);
+            emittingKey=true;root["auto_play_disable_on_move"]=false;
             try{
-                var loader:URLLoader=new URLLoader();nativePending=loader;
-                loader.addEventListener(Event.COMPLETE,function(event:Event):void{
-                    if(nativePending!==loader)return;nativePending=null;
-                    try{acknowledgeKeys(com.adobe.serialization.json.JSON.decode(String(loader.data)),int(state.pulse));}catch(error:Error){keyboardFailure("Resposta invalida da ponte de teclado");}
-                });
-                var failed:Function=function(event:Event):void{
-                    if(nativePending!==loader)return;nativePending=null;
-                    try{var result:Object=com.adobe.serialization.json.JSON.decode(String(loader.data));keyboardFailure(String(result.message || "Falha na ponte local de teclado"));}catch(ignoredResponse:Error){keyboardFailure("Nao foi possivel acessar a ponte local de teclado");}
-                };
-                loader.addEventListener(IOErrorEvent.IO_ERROR,failed);loader.addEventListener(SecurityErrorEvent.SECURITY_ERROR,failed);
-                var request:URLRequest=new URLRequest(String(root["host_url"])+"native_keyboard?access_token="+encodeURIComponent(String(root["access_token"]))+"&flash_token="+encodeURIComponent(String(root["tfmdisney"].data.flash_token)));
-                request.method=URLRequestMethod.POST;request.contentType="application/json";request.data=com.adobe.serialization.json.JSON.encode(state);loader.load(request);
-            }catch(error:Error){nativePending=null;keyboardFailure("Nao foi possivel iniciar a ponte local de teclado");}
-        }
-        private function keyboardAcknowledged():Boolean {
-            if(!nativeReady || nativeAck==null || nativeAckPulse<taskPulse)return false;
-            var desired:Array=desiredKeys();if(desired.length!=nativeAck.length)return false;
-            for each(var key:int in desired)if(nativeAck.indexOf(key)<0)return false;return true;
+                if(!down && stage.focus is TextField && TextField(stage.focus).type=="input")stage.focus=null;
+                diagnosticFrame=true;diagnostic("teclado","ANTES","codigo="+code+" "+(down ? "KEY_DOWN" : "KEY_UP"));
+                target.dispatchEvent(new KeyboardEvent(down ? KeyboardEvent.KEY_DOWN : KeyboardEvent.KEY_UP,true,false,0,code));
+                diagnostic("teclado","DEPOIS","codigo="+code);
+            }finally{
+                root["auto_play_disable_on_move"]=manualFlag;emittingKey=false;
+                if(!down && previousFocus && previousFocus.stage===stage)restoreFocus(previousFocus);
+            }
         }
         private function observedPosition():Object {
             var getter:Function=safeRead(body,safeRead(keys,"get_x_form")) as Function;
@@ -463,18 +414,16 @@ package disney {
             if(t<0 || t>1)return false;return (ax+t*dx)*(ax+t*dx)+(ay+t*dy)*(ay+t*dy)<=1;
         }
         private function executeKeyboardPlan(now:int,current:Object):void {
-            if(!nativeReady){status("Bot: aguardando ponte de teclas reais",now);return;}
             if(!isFinite(Number(current.x)) || !isFinite(Number(current.y))){release();status("Bot: aguardando posicao para os checks",now);return;}
             if(index>=keyboardPlan.length){completed=true;running=false;release();return;}
             var task:Object=keyboardPlan[index];
             if(taskCreatedAt<0){
                 taskCreatedAt=now;taskStartedAt=-1;taskPrevious=null;
                 if(Boolean(task.jump) && Boolean(heldKeys[38]))setKey(38,false);
-                movement(int(task.direction)<0,int(task.direction)>0,Boolean(task.jump));setKey(40,Boolean(task.down));taskPulse=nativePulse;
-                if(!keyboardAcknowledged())flushKeyboard(now);
+                movement(int(task.direction)<0,int(task.direction)>0,Boolean(task.jump));setKey(40,Boolean(task.down));
                 diagnosticFrame=true;diagnostic("plano.teclas","INICIAR","passo="+index+" tecla="+(int(task.direction)<0 ? "LEFT" : int(task.direction)>0 ? "RIGHT" : "NEUTRAL")+" UP="+task.jump+" antigo="+task.oldMs+"ms convertido="+Number(task.holdMs).toFixed(1)+"ms");
             }
-            if(taskStartedAt<0){if(!keyboardAcknowledged())return;taskStartedAt=now;}
+            if(taskStartedAt<0)taskStartedAt=now;
             var elapsed:int=now-taskStartedAt;var actual:Object=observedVelocity();
             if(Boolean(task.jump) && elapsed>=80)setKey(38,false);
             if(Boolean(task.jump) && ((Boolean(actual.valid) && Number(actual.vy)<-30) || Number(current.y)<Number(task.fromY)-3))task.jumpObserved=true;
@@ -495,7 +444,7 @@ package disney {
                 setKey(37,steer && direction<0);setKey(39,steer && direction>0);
             }
             taskPrevious={x:current.x,y:current.y};
-            status("Bot: teclas reais | "+index+"/"+keyboardPlan.length+" | tempo="+elapsed+"/"+Math.round(Number(task.holdMs))+"ms | checks falhos="+missedTargets,now);
+            status("Bot: teclado interno | "+index+"/"+keyboardPlan.length+" | tempo="+elapsed+"/"+Math.round(Number(task.holdMs))+"ms | checks falhos="+missedTargets,now);
         }
         private function restoreFocus(focus:flash.display.InteractiveObject):void {
             try{root.stage.focus=focus;}catch(ignoredFocus:Error){}
@@ -612,9 +561,6 @@ package disney {
             return route;
         }
         public function advance(now:int):void {
-            advanceInternal(now);flushKeyboard(now);
-        }
-        private function advanceInternal(now:int):void {
             if(disconnected)return;
             scanConnections(now);
             if(disconnected)return;
@@ -709,8 +655,6 @@ package disney {
             trace("disconnect");debugLines.push("disconnect");
             diagnosticFrame=true;diagnostic("disconnect","ANTES",channel+" "+reason);
             cancelLegacy();release();running=false;paused=true;enabled=false;observedActive=false;
-            if(nativePending){try{nativePending.close();}catch(ignoredNativeClose:Error){}nativePending=null;}
-            nativeSentAt=-1000;flushKeyboard(getTimer());
             message="disconnect | Autoplay parado e log congelado | reabra o cliente";
             diagnostic("disconnect","CONGELADO",channel+" "+reason);
             refreshDiagnostic(true);
@@ -788,7 +732,7 @@ package disney {
                 running=false;enabled=false;attempted=false;completed=false;paused=false;failure="";routeMirrorKnown=false;
                 status("Bot: desligado | "+code,now);return;
             }
-            if (!enabled) {nativeError=false;nativeReady=false;nativeDirty=true; enabled=true;attempted=false;completed=false;paused=false;failure="";settle=now+250; }
+            if (!enabled) {enabled=true;attempted=false;completed=false;paused=false;failure="";settle=now+250; }
             if (!alive) { wait("Bot: aguardando renascer | "+code,now);return; }
             if (paused) {status(pauseReason,now);return;}
             if (now<settle || !keys.move_class || !keys.move_class[keys.move_free] || (keys.timer_class && keys.timer_class[keys.timer_prop])) {
@@ -815,11 +759,11 @@ package disney {
                 keyboardPlan=convertKeyboardPlan(sequence,Number(spawn.x),Number(spawn.y),mirror,width);
                 diagnostic("decodeRoute","DEPOIS","passos="+sequence.length);
                 prepareKeyboard();
-                // Deltas are before each command. The clock drives input;
-                // position observations never postpone or consume commands.
+                // Converted holds drive internal key events; live position
+                // checks distinguish actual arrival from an expired timer.
                 index=0;completed=false;routeStartedAt=now;lastAppliedAt=now;lastPosition=null;lastPositionAt=-1;measuredVx=0;measuredVy=0;velocitySampleValid=false;previousWalk=null;lastWalkRecordedAt=0;lastMotionLogAt=-1000;lastFeedbackAt=now;velocityCoasting=false;expectedElapsed=Number(sequence[0][2]);
                 due=now+expectedElapsed;index=0;taskCreatedAt=-1;taskStartedAt=-1;missedTargets=0;running=true;
-                diagnostic("iniciarRota","DEPOIS","passos="+sequence.length+" espera gravada="+expectedElapsed+"ms | sem antecipacao");
+                diagnostic("iniciarRota","DEPOIS","originais="+sequence.length+" tarefas convertidas="+keyboardPlan.length+" | teclado interno e checks ao vivo");
             }
             if (!running) {status(completed ? "Bot: comandos da rota finalizados | "+code+" | aguardando proxima rodada" : "Bot: aguardando inicio da rota | "+code,now);return;}
             var currentPosition:Object=observedPosition();var previousPosition:Object=lastPosition;

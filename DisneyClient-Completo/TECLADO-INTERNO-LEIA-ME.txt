@@ -1,0 +1,27 @@
+ROBO — TECLADO INTERNO DO JOGO
+
+Esta versao usa o teclado interno do SWF: KEY_DOWN/KEY_UP para LEFT, RIGHT e UP,
+como o reprodutor anterior. Nao usa SendInput, ponte Windows ou uma API local de
+teclado. Nao escreve posicao/vx/vy diretamente no corpo do jogador.
+
+O calculo de conversao permanece:
+- Le x/y/vx/vy e os tempos gravados para montar um plano separado de teclas.
+- Recalcula a duracao a partir da distancia, velocidade normal e fase do salto.
+- Caminha ate a decolagem estimada e aciona UP pelo teclado interno.
+- Confere X/Y em tempo real; tempo vencido sozinho nao confirma chegada.
+- Um ponto impossivel e registrado como NAO_CONFIRMADO apos tentativa limitada,
+  sem retorno automatico nem parada definitiva do robo.
+
+Use o client pelo fluxo normal ja utilizado. A exigencia adicionada na versao
+anterior de um backend no mesmo Windows foi removida. O iniciador e o backend
+foram restaurados ao fluxo anterior; a nova ponte de teclado foi excluida.
+Recursos antigos independentes, como WJ Fly, nao fazem parte dessa troca do robo.
+
+rotas_teclado_convertidas.json contem 2.205 planos para revisar direcoes e tempos.
+Os mapas originais permanecem intactos. O export usa a primeira amostra como
+referencia inicial; no jogo o plano e recalculado usando a posicao observada.
+DOWN aparece somente nos agachamentos ja existentes nas gravacoes.
+
+32 verificacoes passaram com eventos internos reais no SWF de teste; todas as
+2.205 rotas foram convertidas e os 160.217 checkpoints foram preservados.
+A validacao usa objetos de jogo simulados; ainda nao houve jogo no servidor real.
