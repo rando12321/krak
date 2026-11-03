@@ -1,50 +1,28 @@
 Executed 2026-11-03: Java 21, FFDec 26.4.0, Ruffle 0.7.1, Playwright + Chromium.
-PASS: 190 AVM2 native-keyboard/victory/clock/log assertions; 32 routes decoded; victory independent of route
-PASS: 788 pre-existing method bodies outside RoutePlayerFixed1069 unchanged; 52 helper bodies verified
+PASS: 210 AVM2 assertions; 32 legacy + 2205 supplied routes; 160217 motion snapshots planned
+PASS: 788 pre-existing method bodies outside RoutePlayerFixed1069 unchanged; 59 helper bodies verified
 PASS: full rebuild_precision.sh compilation, verification and runtime test workflow
+PASS: Python validation/calibration of all supplied snapshots
 
-Workflow changed at user request: recorded time and input drive playback;
-position observations are diagnostic and never gate a command. The earlier
-spatial-gate assertions were replaced with clock/velocity/input regressions.
-Native victory, manual intervention, focus, disconnect, clock and logging
-regressions remain exercised.
+The actual AS3 decoder and planner processed all 2,205 supplied nonempty routes,
+165,019 commands and 160,217 motion samples. Three routes contain markers only.
+All trajectory endpoints/midpoints were finite, and source timestamps and jump
+plans were ordered. Tests assert 268 repeated impulse candidates with the corpus
+median gravity. Route-specific planning may use its own calibrated gravity.
+Original fixture bytes and active maps/record files are preserved.
 
-Coverage includes signed16 hundredths conversion to px/s, unsigned negative vy,
-mirrored vx, native vector and getter reads, observed-displacement fallback,
-stale/nonfinite measurements, ground overspeed trimming without reversal,
-hysteresis and minimum switching interval, interpolation of matching-input
-samples, launch/flight protection using vy and jump, optional position loss,
-scheduled jump and release regardless of coordinates, recorded completion time,
-33ms frame quantization and the 63-command legacy trajectory fixture.
+New runtime regressions exercise signed units, velocity-constrained trajectory,
+mirroring, no mutation of input snapshots, discontinuity handling, vy reset while
+jump stays true, duplicate-airborne suppression, explicit release, inferred
+launch before the airborne snapshot, no duplicate impulse on sample arrival,
+vertical phase before/after launch and per-route gravity calibration.
+Existing keyboard, clock/dense timing, native victory, focus/manual interruption,
+disconnect/logging and acceleration/drag model checks remain covered.
 
-A 50-tick fake engine integrates acceleration and drag from held keys only.
-Reference speed is 60px/s; feedback keeps mean speed in the asserted 35–110px/s
-range and peak below 120px/s instead of reaching the model's 180px/s open-loop
-cap. Every tick also checks that feedback never emits reverse input. This is a
-model-specific assertion, not a measurement of real-game precision.
+Corpus validation imports setTimeout, yields between batches, reports progress,
+and fails on uncaught AVM2 runtime errors. The final full run completed all
+2,205 routes. The test SWF/harness is separate from the shipped production SWF.
 
-No native movement functions, animation calls, position setters or velocity
-writes are used by the controller. No live-server gameplay or Windows test.
-
-Direction regressions: contradictory mirror metadata reproduced and corrected
-using decisive near-spawn evidence, normal and reflected spawn, recorded turns,
-stable inference across frames, native metadata preserved, central ambiguity,
-late/missing/out-of-range evidence fallback and reset on reactivation. Input
-mapping is shared by apply and velocity feedback to avoid double inversion.
-14 additional assertions; no live-map reproduction was available.
-
-Dense-timing fix: consume due unchanged snapshots without adding one rendered
-frame per snapshot. Explicit zero-delta commands preserve same-frame order.
-Repeated input snapshots do not repress keys or reset active speed modulation.
-Positive-duration input transitions remain bounded to one per frame; completion
-also counts as a transition to protect the final hold. Work is capped at 64
-samples per frame with every remaining sample retained for continuation.
-The old assertion requiring 10ms unchanged samples to take one 40ms frame each
-was replaced with recorded-deadline checks, reflecting the requested timing fix.
-
-Additional scenarios exercise simultaneous movement/crouch/jump, dense samples
-before a turn, final release timing, bounded 130-sample continuation, and dense
-clock playback with 16/33/50ms frames. Nine speed-model scenarios use 30/60/120px/s
-references at those frame intervals; each asserts average-speed error below
-max(25px/s, 40% of reference), no unexpected reverse/jump, and no position writes.
-These model tolerances are not real-game measurements or an error-zero claim.
+No live-server gameplay, complete real-map simulation or Windows validation.
+Planner coverage is not evidence that every map can be reproduced exactly with
+keyboard inputs when the old snapshots contain instantaneous physical writes.

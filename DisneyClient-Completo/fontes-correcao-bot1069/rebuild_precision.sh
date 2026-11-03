@@ -12,6 +12,7 @@ java -jar "$FFDEC_HOME/ffdec.jar" -replace "$1" "$build_dir/updated.swf" disney.
 java -cp "$ffdec_cp" "$source_dir/VerifyPrecision.java" "$1" "$build_dir/updated.swf"
 java -cp "$ffdec_cp" "$source_dir/BuildFixture.java" "$build_dir/updated.swf" "$source_dir/RoutePlayerTests.as" "$build_dir/test.swf"
 cp "$source_dir/"{test.html,run_avm2_test.js,routes-fixture.json,route-2294519.json} "$build_dir/"
+cp -R "$source_dir/fixtures" "$build_dir/fixtures"
 mkdir "$build_dir/ruffle"
 ln -s "$(realpath -- "$RUFFLE_PACKAGE")" "$build_dir/ruffle/package"
 node "$build_dir/run_avm2_test.js"

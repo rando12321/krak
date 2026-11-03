@@ -59,6 +59,13 @@ package disney {
         private var measuredVy:Number=0;
         private var velocitySampleValid:Boolean=false;
         private var previousWalk:Object;
+        private var lastWalkRecordedAt:Number=0;
+        private var trajectory:Array=[];
+        private var jumpPlan:Array=[];
+        private var jumpPlanIndex:int=0;
+        // Median ballistic estimate from the supplied 2,205 recorded routes.
+        private static const RECORDED_GRAVITY:Number=299.1643454038997;
+        private static const RECORDED_JUMP_VY:Number=-150;
         private var lastMotionLogAt:int=-1000;
         private var lastFeedbackAt:int=0;
         private var velocityCoasting:Boolean=false;
@@ -242,20 +249,124 @@ package disney {
             if(vx!=null && vy!=null && isFinite(Number(vx)) && isFinite(Number(vy)))return {vx:Number(vx)*30,vy:Number(vy)*30,valid:true,source:"fisica"};
             return {vx:measuredVx,vy:measuredVy,valid:velocitySampleValid,source:"deslocamento"};
         }
-        private function referenceVelocity(now:int):Object {
-            var vx:Number=recordedVelocity(Number(previousWalk.vx));
-            var vy:Number=recordedVelocity(Number(previousWalk.vy));
-            // Only interpolate periodic samples of the same input state.
-            // Never anticipate a recorded turn, jump or release.
-            if(index<sequence.length && String(sequence[index][1])=="walk" && due>lastAppliedAt){
-                var next:Object=sequence[index][0];
-                if(Boolean(next.ml)==Boolean(previousWalk.ml) && Boolean(next.mr)==Boolean(previousWalk.mr) && Boolean(next.jump)==Boolean(previousWalk.jump)){
-                    var fraction:Number=Math.max(0,Math.min(1,(now-lastAppliedAt)/(due-lastAppliedAt)));
-                    vx+=(recordedVelocity(Number(next.vx))-vx)*fraction;
-                    vy+=(recordedVelocity(Number(next.vy))-vy)*fraction;
+        public static function estimateRouteGravity(route:Array):Number {
+            var estimates:Array=[];var before:Object=null;var beforeTime:Number=0;var time:Number=0;
+            for each(var step:Array in route){
+                time+=Number(step[2]);if(String(step[1])!="walk")continue;
+                var point:Object=step[0];
+                if(before){
+                    var seconds:Number=(time-beforeTime)/1000;
+                    var va:Number=recordedVelocity(Number(before.vy));var vb:Number=recordedVelocity(Number(point.vy));
+                    var dy:Number=(Number(point.y)-Number(before.y))*0.3;
+                    if(seconds>0.03 && seconds<0.5 && vb>va && Math.abs(dy-(va+vb)*0.5*seconds)<Math.max(3,Math.abs(dy)*0.2)){
+                        var g:Number=(vb-va)/seconds;
+                        if(g>100 && g<700)estimates.push(g);
+                    }
+                }
+                before=point;beforeTime=time;
+            }
+            if(estimates.length<6)return RECORDED_GRAVITY;
+            estimates.sort(Array.NUMERIC);var middle:int=estimates.length>>1;
+            return estimates.length%2==1 ? Number(estimates[middle]) : (Number(estimates[middle-1])+Number(estimates[middle]))/2;
+        }
+        public static function buildTrajectory(route:Array):Array {
+            var result:Array=[];result["gravity"]=estimateRouteGravity(route);var time:Number=0;
+            for each(var step:Array in route){
+                time+=Number(step[2]);
+                if(String(step[1])=="walk")result.push({time:time,point:step[0]});
+            }
+            return result;
+        }
+        public static function requiresJumpEdge(before:Object,point:Object,elapsedMs:Number,gravity:Number=-1):Boolean {
+            if(gravity<=0)gravity=RECORDED_GRAVITY;
+            if(!Boolean(point.jump))return false;
+            if(!before || !Boolean(before.jump))return true;
+            if(elapsedMs<=0)return false;
+            var vy:Number=recordedVelocity(Number(point.vy));
+            var predicted:Number=recordedVelocity(Number(before.vy))+gravity*elapsedMs/1000;
+            // jump is a sampled state, not a key edge. A fresh -150px/s
+            // impulse can occur while successive snapshots both say true.
+            return Math.abs(vy-RECORDED_JUMP_VY)<=6 && predicted-vy>60;
+        }
+        public static function buildJumpPlan(route:Array,gravity:Number=-1):Array {
+            if(gravity<=0)gravity=estimateRouteGravity(route);
+            var plan:Array=[];var time:Number=0;var before:Object=null;var beforeTime:Number=0;
+            for each(var step:Array in route){
+                time+=Number(step[2]);if(String(step[1])!="walk")continue;
+                var point:Object=step[0];
+                if(requiresJumpEdge(before,point,time-beforeTime,gravity)){
+                    var launch:Number=time;var vy:Number=recordedVelocity(Number(point.vy));
+                    var age:Number=(vy-RECORDED_JUMP_VY)/gravity*1000;
+                    // Invert the rising ballistic state only when the inferred
+                    // launch fits inside the observed interval. Otherwise retain
+                    // its timestamp rather than guessing outside the recording.
+                    if(vy<0 && age>0 && age<=time-beforeTime)launch=time-age;
+                    plan.push({time:launch,down:true});
+                }else if(before && Boolean(before.jump) && !Boolean(point.jump))plan.push({time:time,down:false});
+                before=point;beforeTime=time;
+            }
+            return plan;
+        }
+        private function recordedPhase(now:int):Number {
+            return Math.max(lastWalkRecordedAt,expectedElapsed-Math.max(0,due-now));
+        }
+        private function advanceJumpPlan(now:int):void {
+            var phase:Number=recordedPhase(now);var count:int=0;
+            while(jumpPlanIndex<jumpPlan.length && Number(jumpPlan[jumpPlanIndex].time)<=phase && count<64){
+                var event:Object=jumpPlan[jumpPlanIndex++];count++;
+                if(Boolean(event.down) && Boolean(heldKeys[38]))setKey(38,false);
+                setKey(38,Boolean(event.down));
+                diagnosticFrame=true;diagnostic("salto.calculado",Boolean(event.down) ? "IMPULSO" : "SOLTAR","tempoGravado="+Number(event.time).toFixed(1)+"ms fase="+phase.toFixed(1)+"ms");
+            }
+        }
+        public static function sampleTrajectory(samples:Array,time:Number,reflected:Boolean,mapWidth:Number):Object {
+            if(!samples || samples.length==0)return null;
+            var gravity:Number=Number(samples["gravity"]);if(!isFinite(gravity) || gravity<=0)gravity=RECORDED_GRAVITY;
+            var lo:int=0;var hi:int=samples.length;
+            while(lo<hi){var mid:int=(lo+hi)>>1;if(Number(samples[mid].time)<=time)lo=mid+1;else hi=mid;}
+            var i:int=Math.max(0,lo-1);var a:Object=samples[i];var pa:Object=a.point;
+            var x:Number=int(Number(pa.x))*0.3;var y:Number=int(Number(pa.y))*0.3;
+            var vx:Number=recordedVelocity(Number(pa.vx));var vy:Number=recordedVelocity(Number(pa.vy));
+            var continuousX:Boolean=false;
+            if(i+1<samples.length && time>=Number(a.time)){
+                var b:Object=samples[i+1];var pb:Object=b.point;var duration:Number=(Number(b.time)-Number(a.time))/1000;
+                if(duration>0){
+                    var u:Number=Math.max(0,Math.min(1,(time-Number(a.time))/(duration*1000)));
+                    var bx:Number=int(Number(pb.x))*0.3;var by:Number=int(Number(pb.y))*0.3;
+                    var bvx:Number=recordedVelocity(Number(pb.vx));var bvy:Number=recordedVelocity(Number(pb.vy));
+                    var average:Number=(vx+bvx)/2;
+                    continuousX=Math.abs((bx-x)/duration-average)<=Math.max(20,Math.abs(average)*0.35);
+                    // A consistent segment supports a velocity-constrained cubic.
+                    // Discontinuous legacy corrections remain diagnostics only.
+                    if(continuousX){
+                        var u2:Number=u*u;var u3:Number=u2*u;
+                        var hx:Number=(2*u3-3*u2+1)*x+(u3-2*u2+u)*duration*vx+(-2*u3+3*u2)*bx+(u3-u2)*duration*bvx;
+                        var hvx:Number=((6*u2-6*u)*x+(3*u2-4*u+1)*duration*vx+(-6*u2+6*u)*bx+(3*u2-2*u)*duration*bvx)/duration;
+                        x=hx;vx=hvx;
+                    }else {x+=(bx-x)*u;vx+=(bvx-vx)*u;}
+                    // Do not smear an endpoint takeoff backwards over a flight.
+                    if(requiresJumpEdge(pa,pb,duration*1000,gravity)){
+                        var flightTime:Number=u*duration;
+                        var launchAge:Number=(bvy-RECORDED_JUMP_VY)/gravity;
+                        var launchOffset:Number=duration;
+                        if(bvy<0 && launchAge>0 && launchAge<=duration)launchOffset=duration-launchAge;
+                        if(flightTime>=launchOffset && launchOffset<duration){
+                            var sinceLaunch:Number=flightTime-launchOffset;
+                            var launchY:Number=by-RECORDED_JUMP_VY*launchAge-0.5*gravity*launchAge*launchAge;
+                            y=launchY+RECORDED_JUMP_VY*sinceLaunch+0.5*gravity*sinceLaunch*sinceLaunch;
+                            vy=RECORDED_JUMP_VY+gravity*sinceLaunch;
+                        }else if(Boolean(pa.jump) || Math.abs(vy)>24){
+                            y+=vy*flightTime+0.5*gravity*flightTime*flightTime;
+                            vy+=gravity*flightTime;
+                        }else {y+=(by-y)*u;vy=0;}
+                    }else {y+=(by-y)*u;vy+=(bvy-vy)*u;}
                 }
             }
-            return {vx:mirror ? -vx : vx,vy:vy};
+            return {x:reflected ? mapWidth-x : x,y:y,vx:reflected ? -vx : vx,vy:vy,continuousX:continuousX};
+        }
+        private function referenceVelocity(now:int):Object {
+            var phase:Number=recordedPhase(now);
+            return sampleTrajectory(trajectory,phase,mirror,width);
         }
         private function synchronizeMotion(current:Object,now:int):void {
             if(!previousWalk)return;
@@ -268,6 +379,13 @@ package disney {
             var canTrim:Boolean=Boolean(actual.valid) && direction!=0 && !Boolean(previousWalk.jump) && !Boolean(heldKeys[38]) && Math.abs(Number(actual.vy))<24 && Math.abs(Number(reference.vy))<24 && Number(reference.vx)*direction>6;
             if(canTrim){
                 var expected:Number=Number(reference.vx)*direction;
+                // Small tracking error becomes bounded speed feedback, never
+                // a position gate, teleport or an opposite-direction command.
+                var errorX:Number=Number(reference.x)-Number(current.x);
+                if(Boolean(reference.continuousX) && isFinite(errorX) && Math.abs(errorX)<=90){
+                    var correctionLimit:Number=Math.min(30,expected*0.25);
+                    expected+=Math.max(-correctionLimit,Math.min(correctionLimit,errorX*direction*2));
+                }
                 var observed:Number=Number(actual.vx)*direction;
                 var band:Number=Math.max(9,expected*0.12);
                 if(!velocityCoasting && observed>expected+band)velocityCoasting=true;
@@ -284,8 +402,8 @@ package disney {
             }
             if(now-lastMotionLogAt>=500){
                 lastMotionLogAt=now;diagnosticFrame=true;
-                var target:Object=waypoint(previousWalk);
-                diagnostic("movimento","MEDIDO","vx="+Number(actual.vx).toFixed(1)+" vy="+Number(actual.vy).toFixed(1)+"px/s gravado="+Number(reference.vx).toFixed(1)+","+Number(reference.vy).toFixed(1)+"px/s fonte="+actual.source+" valido="+actual.valid+" modulacao="+velocityCoasting+" erroXY="+(target.x-current.x).toFixed(1)+","+(target.y-current.y).toFixed(1)+"px; posicao apenas diagnostico");
+                var target:Object=reference;
+                diagnostic("movimento","MEDIDO","vx="+Number(actual.vx).toFixed(1)+" vy="+Number(actual.vy).toFixed(1)+"px/s gravado="+Number(reference.vx).toFixed(1)+","+Number(reference.vy).toFixed(1)+"px/s fonte="+actual.source+" valido="+actual.valid+" modulacao="+velocityCoasting+" erroXY="+(target.x-current.x).toFixed(1)+","+(target.y-current.y).toFixed(1)+"px; referencia cinetica sem bloquear passos");
             }
         }
         private function restoreFocus(focus:flash.display.InteractiveObject):void {
@@ -592,7 +710,7 @@ package disney {
                 if (!saved) { status("Bot: sem rota salva para "+code,now);return; }
                 attempted=true;
                 diagnostic("decodeRoute","ANTES");
-                sequence=decodeRoute(String(saved));
+                sequence=decodeRoute(String(saved));trajectory=buildTrajectory(sequence);jumpPlan=buildJumpPlan(sequence,Number(trajectory["gravity"]));jumpPlanIndex=0;
                 var spawn:Object=observedPosition();
                 routeMirror=resolveRouteMirror(sequence,Number(spawn.x),width,mirror);routeMirrorKnown=true;
                 diagnostic("direcao","ORIENTACAO","informado="+mirror+" rota="+routeMirror+" inicioX="+spawn.x+" largura="+width);
@@ -601,7 +719,7 @@ package disney {
                 prepareKeyboard();
                 // Deltas are before each command. The clock drives input;
                 // position observations never postpone or consume commands.
-                index=0;completed=false;routeStartedAt=now;lastAppliedAt=now;lastPosition=null;lastPositionAt=-1;measuredVx=0;measuredVy=0;velocitySampleValid=false;previousWalk=null;lastMotionLogAt=-1000;lastFeedbackAt=now;velocityCoasting=false;expectedElapsed=Number(sequence[0][2]);
+                index=0;completed=false;routeStartedAt=now;lastAppliedAt=now;lastPosition=null;lastPositionAt=-1;measuredVx=0;measuredVy=0;velocitySampleValid=false;previousWalk=null;lastWalkRecordedAt=0;lastMotionLogAt=-1000;lastFeedbackAt=now;velocityCoasting=false;expectedElapsed=Number(sequence[0][2]);
                 due=now+expectedElapsed;running=true;
                 diagnostic("iniciarRota","DEPOIS","passos="+sequence.length+" espera gravada="+expectedElapsed+"ms | sem antecipacao");
             }
@@ -613,6 +731,7 @@ package disney {
             measuredVy=validPositions && sampleMs>0 && sampleMs<=250 ? (currentPosition.y-previousPosition.y)*1000/sampleMs : 0;
             velocitySampleValid=validPositions && sampleMs>0 && sampleMs<=250;
             lastPosition=currentPosition;lastPositionAt=now;
+            advanceJumpPlan(now);
             // Consume dense unchanged samples on the recorded clock, not one
             // frame per sample. Emit at most one timed input transition/frame;
             // explicit zero-delta commands retain their recorded same-frame order.
@@ -646,14 +765,14 @@ package disney {
                     diagnostic("relogio.teclado","AGENDADO","intervalo="+nextInterval+"ms atrasoQuadro="+frameLateness+"ms fasePreservada="+retainPhase+" proximo="+due+"ms");
                 }
             }
-            if(running)synchronizeMotion(currentPosition,now);
+            if(running){advanceJumpPlan(now);synchronizeMotion(currentPosition,now);}
             status(running ? "Bot: reproduzindo "+code+" | "+index+"/"+sequence.length : "Bot: comandos da rota finalizados | "+code,now);
         }
         private function changesInput(step:Array):Boolean {
             // Completing releases all owned keys and is a real input transition.
             if(sequence!=null && step===sequence[sequence.length-1])return true;
             var action:String=String(step[1]);
-            if(action=="walk")return previousWalk==null || Boolean(previousWalk.ml)!=Boolean(step[0].ml) || Boolean(previousWalk.mr)!=Boolean(step[0].mr) || Boolean(previousWalk.jump)!=Boolean(step[0].jump);
+            if(action=="walk")return previousWalk==null || Boolean(previousWalk.ml)!=Boolean(step[0].ml) || Boolean(previousWalk.mr)!=Boolean(step[0].mr);
             if(action=="crouch" || action=="duck")return Boolean(heldKeys[40])!=(Number(step[0])!=0);
             return false;
         }
@@ -661,8 +780,8 @@ package disney {
             var action:String=String(step[1]);
             if(action=="walk"){
                 var point:Object=step[0];var input:Object=routeInput(point);
-                if(changesInput(step))movement(Boolean(input.left),Boolean(input.right),Boolean(point.jump));
-                previousWalk=point;
+                if(changesInput(step))movement(Boolean(input.left),Boolean(input.right),Boolean(heldKeys[38]));
+                previousWalk=point;lastWalkRecordedAt=expectedElapsed;
             }else if(action=="crouch" || action=="duck")setKey(40,Number(step[0])!=0);
             // Cheese/hole markers consume time only. Real movement and native
             // game processing handle collection and server-confirmed arrival.

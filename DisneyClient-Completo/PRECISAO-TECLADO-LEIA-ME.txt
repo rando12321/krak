@@ -1,98 +1,96 @@
-Reprodução por relógio, teclas e velocidade — 2026-11-03
+Conversão cinética das gravações para teclas — 2026-11-03
 
-Aplicado aos fontes e ao ChargeurTransformice.swf deste pacote.
+Esta versão altera os cálculos do reprodutor e o SWF. Não converte nem substitui
+os mapas/rotas usados pelo cliente. O JSON anexado foi preservado como fixture
+em fontes-correcao-bot1069/fixtures/mapas_e_rotas_por_id.json.
 
-A ordem e os prazos gravados comandam as teclas. A posição é apenas uma checagem
-no diagnóstico: não existe espera para alcançar coordenadas, retorno corretivo,
-pausa por desvio ou salto de comandos para compensar posição.
+Base analisada:
+- 14.128 entradas; 2.205 têm rota e 11.923 não têm gravação.
+- 165.019 passos; 160.217 amostras de movimento.
+- 6.433 intervalos zero e 18.056 intervalos positivos menores que 33 ms.
+- 3 rotas contêm apenas marcadores, sem amostras de movimento.
+- Gravidade mediana estimada: 299,164345 px/s² em 68.183 pares consistentes.
+- Velocidade horizontal modal não nula: 103,5 px/s.
+- Impulso vertical típico: -150 px/s.
+O relatório reproduzível e o SHA-256 do original estão em recorded-calibration.json.
 
-Direção e espelhamento:
-- Teclas e controle de velocidade usam uma única transformação de mr/ml.
-- No início, valida o espelhamento informado contra a primeira coordenada da
-  rota e a posição observada do jogador. Essa checagem não espera por ponto.
-- Só pode corrigir a orientação se a primeira amostra ocorrer até 1500 ms,
-  estiver próxima de um dos dois inícios possíveis (até 90 px ou 15% da largura,
-  o menor valor) e os dois resultados diferirem por ao menos 35% da largura.
-- Inícios centrais/ambíguos, coordenadas ausentes, amostras tardias ou distantes
-  preservam a informação nativa; não há inversão indiscriminada das teclas.
-- A orientação fica estável durante a execução e é recalculada ao reiniciar,
-  renascer ou mudar de mapa. Não altera reverse_map do carregador nativo.
-- O diagnóstico registra espelhamento informado e orientação escolhida.
-Essa validação cobre a inversão reproduzida localmente por metadado contraditório;
-sem o código do mapa do relato, não confirma todas as possíveis causas no jogo.
+Por que repetir mr/ml/jump não bastava:
+As gravações descrevem estados físicos. jump=true não é um evento de tecla:
+124 trechos mostram um reinício forte de vy próximo de -150 px/s enquanto os
+dois registros continuam com jump=true. Um teste balístico com a gravidade
+mediana identifica 268 candidatos a impulso repetido, incluindo casos que só
+ficam evidentes ao considerar o tempo. São candidatos inferidos, não confirmação
+independente de cada salto no jogo.
 
-vx/vy e unidades:
-O RoutePlayer.as legado incluído no projeto usa:
-  vx = (int(point.vx) << 16 >> 16) / 100
-  vy = (int(point.vy) << 16 >> 16) / 100
-São inteiros de 16 bits com sinal em centésimos de unidade física por segundo.
-O controle novo converte as duas componentes para pixels/segundo multiplicando
-por 30. Ex.: 345 equivale a 103,5 px/s; 65036 equivale a -150 px/s, não a uma
-velocidade positiva enorme. Espelhamento inverte vx, sem inverter vy.
+Novo cálculo:
+1. Decodifica vx/vy como signed16 / 100 * 30, em pixels/segundo. Ex.: 65036
+   representa -150 px/s. As coordenadas usam centésimos de unidade física.
+2. Cria uma linha de referência temporal em memória, sem escrever nas gravações.
+3. Estima a gravidade de cada rota por pares balísticos consistentes. Usa a
+   mediana geral se houver menos de seis observações válidas naquela rota.
+4. Em segmentos horizontais consistentes, reconstrói posição e velocidade com
+   uma curva cúbica limitada pelas posições e velocidades dos extremos. Saltos
+   de posição legados são marcados como descontínuos e não geram perseguição.
+5. Compara a velocidade real do corpo com a referência cinética. Um erro pequeno
+   de trajetória pode ajustar a velocidade desejada, limitado a 30 px/s ou 25%
+   da referência, o menor valor. Isso nunca manda voltar nem bloqueia um passo.
+6. No chão, modula a direção gravada com soltar/reapertar e histerese. Mantém ao
+   menos 40 ms entre ajustes, preserva a entrada de lançamento/voo e não impõe
+   posição, velocidade, animação ou direção contrária diretamente na física.
+7. Reconstrói um plano de impulsos de salto a partir de vy, gravidade e tempo.
+   Se a amostra já está subindo, estima a decolagem por
+      idade = (vy_da_amostra - vy_do_impulso) / gravidade
+   Só antecipa se essa idade couber no intervalo observado; caso contrário,
+   mantém o instante da amostra. Não extrapola a decolagem para fora da gravação.
+8. Um novo impulso pode gerar KEY_UP seguido de KEY_DOWN mesmo que jump tenha
+   permanecido true. A chegada da amostra posterior não repete o mesmo impulso.
+   Solturas explícitas continuam no tempo gravado.
+9. Não mistura a velocidade do salto futuro por todo o intervalo anterior.
+   A referência vertical considera a fase antes/depois da decolagem calculada.
 
-Leitura e controle:
-- Lê a velocidade real pelo getter nativo ou pelo vetor físico existente.
-- Se não houver leitura nativa válida, usa deslocamento observado por tempo,
-  nas mesmas unidades. Amostras com intervalo acima de 250 ms são descartadas.
-- Interpola vx/vy entre amostras que mantêm exatamente os mesmos comandos.
-  Não antecipa viradas, saltos ou solturas.
-- No chão, se a velocidade exceder a referência, solta temporariamente a direção
-  gravada e reaperta quando ela volta à faixa. Nunca usa direção contrária para
-  frear nem escreve velocidade, posição ou animação diretamente.
-- A faixa tem histerese e mínimo de 40 ms entre ajustes para evitar tremulação.
-- Usa vy real e gravado para distinguir movimento vertical: não aplica a
-  limitação de velocidade de chão durante voo ou com a tecla de salto mantida.
-- Se a referência começa em zero ou indica outra direção, mantém a entrada
-  gravada; não bloqueia a aceleração inicial nem inventa comando oposto.
-- Salto e soltura ocorrem no prazo, sem depender de altura ou chegada ao ponto.
-- Sem dados válidos de velocidade, segue as teclas gravadas, sem bloquear.
-- A ausência de coordenadas opcionais também não bloqueia os comandos.
+Tempo e direção:
+- Coordenadas não são condição de avanço. Não há espera por ponto ou retorno
+  para buscar uma coordenada perdida.
+- Amostras repetidas avançam no relógio sem exigir um quadro extra cada uma e
+  sem gerar novas teclas ou reiniciar a modulação.
+- Intervalos explicitamente zero preservam a ordem no mesmo quadro.
+- Transições positivas de direção/agachamento são limitadas por quadro para
+  preservar a duração da entrada real após atrasos grandes.
+- O processamento de amostras e de eventos de salto é limitado a 64 por chamada.
+- Teclas e referência de vx usam o mesmo espelhamento. A validação inicial só
+  corrige metadado contraditório com evidência próxima e não ambígua do início.
+  Em casos ambíguos preserva o espelhamento informado pelo jogo.
+- Controle manual, chat, perda de foco, desconexão, morte e vitória mantêm os
+  fluxos existentes de interrupção e liberação de teclas.
 
-Relógio e amostras densas:
-- Amostras que não mudam as teclas são consumidas no prazo gravado, sem exigir
-  um quadro extra por amostra. Isso evita multiplicar a duração de rotas densas.
-- Amostras repetidas atualizam a referência de velocidade sem reapertar a tecla
-  e sem reiniciar a modulação já ativa.
-- Comandos com intervalo explicitamente zero executam na ordem, no mesmo quadro,
-  incluindo salto e agachamento simultâneos.
-- Transições com intervalo positivo são limitadas a uma por quadro para não
-  esmagar o tempo de uma tecla recém-pressionada durante a recuperação de atraso.
-- A conclusão da rota também é tratada como transição: soltar as teclas não pode
-  apagar o intervalo que deveria manter o último movimento.
-- O processamento de amostras fica limitado a 64 por quadro; as demais continuam
-  no quadro seguinte, sem descarte e sem loop sem limite.
-- Pequenos atrasos normais preservam a fase; atrasos grandes entre transições
-  ativas reiniciam o próximo intervalo sem rajada de viradas/saltos.
-Controle manual, chat, perda de foco, desconexão, morte e vitória mantêm os fluxos
-existentes de interrupção/liberação de teclas.
-
-Limite físico:
-O robô legado atribuía vx/vy diretamente ao corpo e ajustava coordenadas. Aqui,
-as teclas solicitam movimento ao motor do jogo; aceleração, atrito e colisões
-continuam sob controle dele. A modulação reduz excesso de velocidade no chão,
-mas não pode impor uma velocidade exata nem corrigir fisicamente uma colisão.
-Os testes locais não garantem erro zero no servidor ou na física real.
-
-Validação atual:
-- 190 verificações AVM2 executadas no SWF com Ruffle e Chromium.
-- 32 rotas decodificadas e cenário legado de 63 comandos.
-- Rotas densas verificadas com quadros de 16, 33 e 50 ms, comandos simultâneos,
-  virada após amostras repetidas e continuação limitada de 130 amostras.
-- Nove cenários adicionais de velocidade: referências de 30, 60 e 120 px/s com
-  cada um dos três intervalos de quadro acima, em física simulada.
-- Modelo de aceleração/atrito confirma redução do excesso de velocidade com
-  entrada de teclado, sem escrita física nem retorno de direção.
-- Conversão assinada, espelhamento, leitura nativa e fallback, voo, salto,
-  soltura, ordem, tempo, foco e fluxo de vitória/desconexão exercitados.
+Validação executada:
+- 210 verificações AVM2 passaram no SWF real com Ruffle/Chromium.
+- 32 rotas legadas e todas as 2.205 rotas fornecidas foram decodificadas e
+  planejadas pelo AS3, em lotes. Não é simulação completa dos 2.205 mapas.
+- Endpoints e pontos médios das trajetórias foram verificados quanto a valores
+  finitos; a ordem dos tempos e planos de salto foi preservada em toda a base.
+- Testes específicos verificam impulso sem borda de jump, decolagem anterior
+  à amostra aérea, ausência de impulso duplicado, gravidade por rota, espelho,
+  curvas consistentes e descontinuidades sem perseguição de posição.
+- Permanecem testes de aceleração/atrito simulados, 16/33/50 ms por quadro,
+  velocidades de 30/60/120 px/s, teclado, foco, vitória e desconexão.
 - 788 corpos de métodos anteriores ao helper preservados byte a byte.
-- Limites de pilha/escopo de 52 corpos do helper verificados.
-- ZIP e manifesto SHA-256 verificados.
-Não houve teste em Windows nem conexão ao servidor do jogo.
+- Pilha/escopo de 59 corpos do helper verificados.
+- SHA-256 do JSON anexado e dos mapas ativos preservado; integridade do ZIP
+  e manifesto ARQUIVOS-SHA256.json verificados.
 
-Referência:
-O link externo fornecido para juninhpsx/krakitos retornou 404 nesta sessão.
-A conversão acima foi lida no fonte legado fontes-autoplay/RoutePlayer.as já
-incluído neste projeto; não é apresentada como leitura daquele ZIP indisponível.
+Limites:
+O robô legado atribuía coordenadas e vx/vy diretamente ao corpo. Teclas não
+reproduzem arbitrariamente uma correção instantânea de posição, impulso externo,
+colisão ou velocidade acima da capacidade do motor. A conversão calcula entradas
+compatíveis e mantém a execução, mas não garante equivalência física exata.
+Não houve teste em Windows nem conexão ao servidor do jogo. Os testes completos
+da base verificam planejamento e integridade, não sucesso em cada mapa real.
+
+Reproduzir análise:
+  python3 fontes-correcao-bot1069/analyze_recorded_routes.py
+O comando apenas lê o original e imprime o relatório. --output permite gravar
+um relatório em outro arquivo; não altera a fixture nem os mapas ativos.
 
 Recompilar e testar:
 Java 21, FFDec 26.4.0, Node.js, Playwright, Chromium e @ruffle-rs/ruffle 0.7.1.
@@ -103,7 +101,8 @@ RUFFLE_PACKAGE=/caminho/node_modules/@ruffle-rs/ruffle \
 NODE_PATH=/caminho/node_modules \
 bash fontes-correcao-bot1069/rebuild_precision.sh entrada.swf saida.swf
 
-CHROMIUM_PATH seleciona outro Chromium, se necessário.
-O script só copia a saída após compilação e testes passarem.
-PatchBot1069.java e VerifyBot1069.java são ferramentas históricas para o SWF
-anterior à instalação do bot; não reaplicar ao SWF já corrigido.
+CHROMIUM_PATH seleciona outro Chromium, se necessário. A fixture do corpus
+acompanha o pacote. A saída só é copiada após compilação e testes passarem.
+Os lotes cedem o controle ao navegador; o runner detecta erros AVM2 não tratados.
+PatchBot1069.java/VerifyBot1069.java são históricos e não devem ser reaplicados
+ao SWF que já contém o helper.

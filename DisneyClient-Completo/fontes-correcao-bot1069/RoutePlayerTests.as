@@ -1,6 +1,6 @@
 package disney {
  import flash.display.MovieClip;import flash.display.Sprite;import flash.text.TextField;import flash.geom.Point;import flash.utils.ByteArray;
- import flash.events.Event;import flash.events.KeyboardEvent;import flash.events.MouseEvent;import flash.external.ExternalInterface;
+ import flash.utils.setTimeout;import flash.events.Event;import flash.events.KeyboardEvent;import flash.events.MouseEvent;import flash.external.ExternalInterface;
  public class RoutePlayerTests {
   private static var count:int=0;private static var host:MovieClip;private static var previous:Object;
   private static var capturedPacket:ByteArray;
@@ -42,9 +42,39 @@ package disney {
    };
    previous={root:r,events:events,inputs:inputs,keys:keys,body:body,player:player,map:map,render:render,placements:placements,native:native,robot:new RoutePlayerFixed1069(r),animations:function():int{return animationCalls;},sent:function():int{return sent;}};return previous;
   }
+  private static var corpusState:Object;
+  private static var corpusField:TextField;
+  private static function runCorpusBatch():void {
+   var result:String;
+   try{
+    var end:int=Math.min(int(corpusState.total),int(corpusState.index)+25);
+    while(int(corpusState.index)<end){
+     var raw:String=String(ExternalInterface.call("getRecordedRoute",int(corpusState.index)));
+     var route:Array=RoutePlayerFixed1069.decodeRoute(raw);corpusState.steps+=route.length;
+     var motion:Array=RoutePlayerFixed1069.buildTrajectory(route);var plan:Array=RoutePlayerFixed1069.buildJumpPlan(route,Number(motion["gravity"]));corpusState.walks+=motion.length;if(motion.length==0)corpusState.empty++;
+     for(var i:int=0;i<motion.length;i++){
+      if(i>0){if(Number(motion[i].time)<Number(motion[i-1].time))corpusState.ordered=false;if(Boolean(motion[i-1].point.jump) && Boolean(motion[i].point.jump) && RoutePlayerFixed1069.requiresJumpEdge(motion[i-1].point,motion[i].point,Number(motion[i].time)-Number(motion[i-1].time)))corpusState.repeats++;}
+      var sample:Object=RoutePlayerFixed1069.sampleTrajectory(motion,Number(motion[i].time),false,800);
+      if(!isFinite(sample.x) || !isFinite(sample.y) || !isFinite(sample.vx) || !isFinite(sample.vy))corpusState.finite=false;
+      if(i+1<motion.length){sample=RoutePlayerFixed1069.sampleTrajectory(motion,(Number(motion[i].time)+Number(motion[i+1].time))/2,false,800);if(!isFinite(sample.x) || !isFinite(sample.y) || !isFinite(sample.vx) || !isFinite(sample.vy))corpusState.finite=false;}
+     }
+     for(i=1;i<plan.length;i++)if(Number(plan[i].time)<Number(plan[i-1].time))corpusState.planOrdered=false;
+     corpusState.index++;
+    }
+    if(int(corpusState.index)%100==0 || int(corpusState.index)==int(corpusState.total))ExternalInterface.call("recordCorpusProgress",int(corpusState.index));
+    if(int(corpusState.index)<int(corpusState.total)){setTimeout(runCorpusBatch,0);return;}
+    check(corpusState.total==2205 && corpusState.steps==165019,"all supplied routes execute the actual AS3 decoder and planner");
+    check(corpusState.walks==160217 && corpusState.empty==3,"supplied motion and marker-only routes retain original counts");
+    check(corpusState.ordered && corpusState.planOrdered && corpusState.finite,"all supplied endpoints and midpoints remain ordered and finite");
+    check(corpusState.repeats==268,"supplied vy profiles expose repeated takeoffs missed by flag-only playback");
+    result="PASS: "+count+" AVM2 assertions; 32 legacy + 2205 supplied routes; 160217 motion snapshots planned";
+   }catch(error:Error){result="FAIL: corpus route "+corpusState.index+" "+error.message+" #"+error.errorID;}
+   corpusField.text=result;trace(result);ExternalInterface.call("recordTest",result);
+  }
   public static function run(display:MovieClip):void {host=display;
    var result:String;
    try {
+    ExternalInterface.call("recordTestStage","core-start");
     var raw:ByteArray=new ByteArray();raw.writeByte(0);raw.writeByte(0);display["handle_packet"](raw,"main");
     check(capturedPacket===raw && capturedChannel=="main","actual MainTimeline wrapper invokes aliased native method with the original packet");
     var f:Object=fixture();f.robot.advance(0);check(f.events.length==0,"settling sends no input");f.robot.advance(300);
@@ -128,11 +158,22 @@ package disney {
         for(var modelTime:int=300+modelFrame;modelTime<=1300;modelTime+=modelFrame){var modelSeconds:Number=modelFrame/1000;modelSpeed=f.inputs[39] ? Math.min(180,modelSpeed+600*modelSeconds) : Math.max(0,modelSpeed-300*modelSeconds);f.body.velocity.vx=modelSpeed/30;f.body.position.x+=modelSpeed*modelSeconds/30;f.robot.advance(modelTime);modelSum+=modelSpeed;modelSamples++;if(f.inputs[37] || f.inputs[38])noUnexpectedInput=false;}
         check(modelSamples>0 && Math.abs(modelSum/modelSamples-modelTarget)<Math.max(25,modelTarget*0.4) && noUnexpectedInput && f.placements.length==0,"simulated speed tracking at "+modelTarget+"px/s with "+modelFrame+"ms frames");
     }
+    ExternalInterface.call("recordTestStage","kinetic-tests");
+    var kineticA:Object={x:0,y:0,vx:200,vy:0,jump:false,mr:true,ml:false,frame:0};var kineticB:Object={x:200,y:0,vx:200,vy:0,jump:false,mr:true,ml:false,frame:0};var kineticRoute:Array=[[kineticA,"walk",0],[kineticB,"walk",1000],["hole",100]];var kineticOriginal:String=com.adobe.serialization.json.JSON.encode(kineticRoute);var kineticSamples:Array=RoutePlayerFixed1069.buildTrajectory(kineticRoute);var kineticMid:Object=RoutePlayerFixed1069.sampleTrajectory(kineticSamples,500,false,800);check(Math.abs(kineticMid.x-30)<0.001 && Math.abs(kineticMid.vx-60)<0.001 && kineticMid.continuousX,"velocity-constrained trajectory reproduces a consistent segment");var kineticMirror:Object=RoutePlayerFixed1069.sampleTrajectory(kineticSamples,500,true,800);check(Math.abs(kineticMirror.x-770)<0.001 && kineticMirror.vx==-kineticMid.vx && kineticMirror.vy==kineticMid.vy,"trajectory mirroring transforms position and vx once while preserving vy");check(com.adobe.serialization.json.JSON.encode(kineticRoute)==kineticOriginal,"building and sampling a control reference never rewrites original snapshots");
+    kineticB.x=10000;kineticMid=RoutePlayerFixed1069.sampleTrajectory(kineticSamples,500,false,800);check(!kineticMid.continuousX && isFinite(kineticMid.vx),"legacy position discontinuity disables tracking correction without blocking the clock");kineticB.x=200;
+    kineticA.jump=true;kineticA.vy=-100;kineticB.jump=true;kineticB.vy=65036;check(RoutePlayerFixed1069.requiresJumpEdge(kineticA,kineticB,100),"vy reset detects a new takeoff while jump stays true");kineticA.vy=65036;check(!RoutePlayerFixed1069.requiresJumpEdge(kineticA,kineticB,50),"short duplicate airborne sample does not manufacture a new jump");kineticB.jump=false;check(!RoutePlayerFixed1069.requiresJumpEdge(kineticA,kineticB,500),"explicit jump-off snapshot never generates a takeoff");
+    kineticA.jump=false;kineticA.vy=0;kineticB.jump=true;kineticB.vy=-250;var kineticPlan:Array=RoutePlayerFixed1069.buildJumpPlan(kineticRoute);check(kineticPlan.length==1 && kineticPlan[0].time>740 && kineticPlan[0].time<760,"inverse ballistic timing recovers launch before an already-airborne snapshot");kineticMid=RoutePlayerFixed1069.sampleTrajectory(kineticSamples,900,false,800);check(kineticMid.vy<0 && kineticMid.vy>-150,"vertical reference evolves from the inferred impulse instead of blending jump speed across the whole gap");kineticB.vy=65036;kineticMid=RoutePlayerFixed1069.sampleTrajectory(kineticSamples,500,false,800);check(kineticMid.vy>=0,"endpoint takeoff is not smeared backwards into the preceding ground interval");
+    f=fixture();p0=walk(0,0);p0[0].jump=false;p0[0].vy=0;p1=walk(0,1000);p1[0].vy=-250;f.keys.maps["@123"]=com.adobe.serialization.json.JSON.encode([p0,p1,["hole",100]]);f.robot.advance(0);f.robot.advance(300);f.robot.advance(1000);check(!f.inputs[38],"calculated launch does not fire before its inferred phase");f.robot.advance(1050);check(f.inputs[38] && f.robot.currentStep==1,"inferred launch fires before the later airborne snapshot without waiting for position");var impulseCount:int=0;for each(var kineticKey:Object in f.events)if(kineticKey.code==38 && kineticKey.down)impulseCount++;f.robot.advance(1300);var impulseAfter:int=0;for each(kineticKey in f.events)if(kineticKey.code==38 && kineticKey.down)impulseAfter++;check(impulseAfter==impulseCount && f.robot.currentStep==2,"arrival of the airborne snapshot does not duplicate an already-calculated takeoff");
+    f=fixture();p0=walk(0,0);p0[0].vy=65036;p1=walk(0,500);p1[0].vy=65036;f.keys.maps["@123"]=com.adobe.serialization.json.JSON.encode([p0,p1,["hole",100]]);f.robot.advance(0);f.robot.advance(300);f.robot.advance(800);var repeatedDowns:int=0;var repeatedUps:int=0;for each(kineticKey in f.events)if(kineticKey.code==38){if(kineticKey.down)repeatedDowns++;else repeatedUps++;}check(repeatedDowns==2 && repeatedUps==1 && f.inputs[38],"repeated ballistic impulse rearms native jump even without a false flag between snapshots");
+    ExternalInterface.call("recordTestStage","gravity-test");
+    var calibratedFlight:Array=[];for(var calibratedIndex:int=0;calibratedIndex<8;calibratedIndex++){var calibratedTime:Number=calibratedIndex*0.1;var calibratedPoint:Object={x:0,y:int((300-90*calibratedTime+75*calibratedTime*calibratedTime)/0.3),vx:0,vy:int((-90+150*calibratedTime)/0.3),jump:true,mr:false,ml:false,frame:0};calibratedFlight.push([calibratedPoint,"walk",calibratedIndex==0 ? 0 : 100]);}check(Math.abs(RoutePlayerFixed1069.estimateRouteGravity(calibratedFlight)-150)<1,"gravity is estimated per route from consistent ballistic observations");var calibratedSamples:Array=RoutePlayerFixed1069.buildTrajectory(calibratedFlight);check(Math.abs(Number(calibratedSamples["gravity"])-150)<1,"trajectory carries route-specific gravity without modifying its snapshots");
+    ExternalInterface.call("recordTestStage","legacy-tests");
     var routes:Array=ExternalInterface.call("getRoutes") as Array;for each(var saved:String in routes)RoutePlayerFixed1069.decodeRoute(saved);check(routes.length==32,"legacy route formats still decode");
     f=fixture();f.keys.maps["@123"]=String(ExternalInterface.call("getRouteCase"));f.robot.advance(0);var samples:Array=RoutePlayerFixed1069.decodeRoute(String(f.keys.maps["@123"]));for(var clock:int=300;clock<40000;clock+=33){if(f.robot.currentStep<samples.length && samples[f.robot.currentStep][1]=="walk"){f.body.position.x=Number(samples[f.robot.currentStep][0].x)/100;f.body.position.y=Number(samples[f.robot.currentStep][0].y)/100;}f.robot.advance(clock);}check(f.robot.currentStep==63 && f.events.length>0 && f.placements.length==0,"63 legacy commands complete when observed trajectory matches, without physical setters");check(f.animations()==0 && f.sent()==0,"complete real route produces no added animation or fake confirmation requests");
     result="PASS: "+count+" AVM2 native-keyboard/victory/clock/log assertions; 32 routes decoded; victory independent of route";
    }catch(error:Error){result="FAIL: "+error.message+" #"+error.errorID;}
-   var field:TextField=new TextField();field.width=780;field.height=400;field.text=result;display.addChild(field);trace(result);if(ExternalInterface.available)ExternalInterface.call("recordTest",result);
+   var field:TextField=new TextField();field.width=780;field.height=400;field.text=result;display.addChild(field);
+   if(result.indexOf("PASS:")==0){ExternalInterface.call("recordTestStage","corpus-start");corpusField=field;corpusState={index:0,total:int(ExternalInterface.call("getRecordedRouteCount")),walks:0,steps:0,repeats:0,empty:0,finite:true,ordered:true,planOrdered:true};field.text="Validating supplied route corpus...";setTimeout(runCorpusBatch,0);}else {trace(result);if(ExternalInterface.available)ExternalInterface.call("recordTest",result);}
   }
  }
 }

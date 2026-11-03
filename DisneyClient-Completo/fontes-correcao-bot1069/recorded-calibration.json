@@ -1,0 +1,81 @@
+{
+  "source_sha256": "d9cbe6880d2e9cd4b6537bafa57ad46947537f3f1de4199c7ccec30c66cc9b24",
+  "counts": {
+    "routes": 2205,
+    "steps": 165019,
+    "zero_delta_samples": 6433,
+    "positive_delta_below_33ms": 18056,
+    "walks": 160217,
+    "routes_without_walk": 3,
+    "direct_impulse_resets_without_flag_edge": 124,
+    "entries_without_route": 11923,
+    "ballistic_repeat_impulse_candidates": 268
+  },
+  "gravity_px_s2_median": 299.1643454038997,
+  "gravity_sample_count": 68183,
+  "jump_impulse_vy_px_s": -150,
+  "velocity_encoding": "signed16 / 100 * 30 px/s",
+  "horizontal_speed_modes_px_s": [
+    [
+      103.5,
+      20263
+    ],
+    [
+      0.0,
+      9662
+    ],
+    [
+      33.9,
+      6841
+    ],
+    [
+      3.6,
+      3519
+    ],
+    [
+      1.8,
+      3145
+    ],
+    [
+      7.5,
+      2485
+    ],
+    [
+      7.2,
+      2174
+    ]
+  ],
+  "impulse_examples": [
+    {
+      "map": "@149422",
+      "at_ms": 12399,
+      "before_vy_px_s": -54.900000000000006,
+      "vy_px_s": -150.0
+    },
+    {
+      "map": "@167075",
+      "at_ms": 6294,
+      "before_vy_px_s": -64.80000000000001,
+      "vy_px_s": -150.0
+    },
+    {
+      "map": "@167075",
+      "at_ms": 6980,
+      "before_vy_px_s": -64.5,
+      "vy_px_s": -150.0
+    },
+    {
+      "map": "@167075",
+      "at_ms": 9488,
+      "before_vy_px_s": -44.7,
+      "vy_px_s": -150.0
+    },
+    {
+      "map": "@167075",
+      "at_ms": 13661,
+      "before_vy_px_s": -39.300000000000004,
+      "vy_px_s": -150.0
+    }
+  ],
+  "scope": "snapshot validation and model calibration; not live-game success"
+}
