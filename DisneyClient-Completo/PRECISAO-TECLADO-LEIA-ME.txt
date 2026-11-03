@@ -6,6 +6,21 @@ A ordem e os prazos gravados comandam as teclas. A posição é apenas uma checa
 no diagnóstico: não existe espera para alcançar coordenadas, retorno corretivo,
 pausa por desvio ou salto de comandos para compensar posição.
 
+Direção e espelhamento:
+- Teclas e controle de velocidade usam uma única transformação de mr/ml.
+- No início, valida o espelhamento informado contra a primeira coordenada da
+  rota e a posição observada do jogador. Essa checagem não espera por ponto.
+- Só pode corrigir a orientação se a primeira amostra ocorrer até 1500 ms,
+  estiver próxima de um dos dois inícios possíveis (até 90 px ou 15% da largura,
+  o menor valor) e os dois resultados diferirem por ao menos 35% da largura.
+- Inícios centrais/ambíguos, coordenadas ausentes, amostras tardias ou distantes
+  preservam a informação nativa; não há inversão indiscriminada das teclas.
+- A orientação fica estável durante a execução e é recalculada ao reiniciar,
+  renascer ou mudar de mapa. Não altera reverse_map do carregador nativo.
+- O diagnóstico registra espelhamento informado e orientação escolhida.
+Essa validação cobre a inversão reproduzida localmente por metadado contraditório;
+sem o código do mapa do relato, não confirma todas as possíveis causas no jogo.
+
 vx/vy e unidades:
 O RoutePlayer.as legado incluído no projeto usa:
   vx = (int(point.vx) << 16 >> 16) / 100
@@ -48,14 +63,14 @@ mas não pode impor uma velocidade exata nem corrigir fisicamente uma colisão.
 Os testes locais não garantem erro zero no servidor ou na física real.
 
 Validação atual:
-- 163 verificações AVM2 executadas no SWF com Ruffle e Chromium.
+- 177 verificações AVM2 executadas no SWF com Ruffle e Chromium.
 - 32 rotas decodificadas e cenário legado de 63 comandos.
 - Modelo de aceleração/atrito confirma redução do excesso de velocidade com
   entrada de teclado, sem escrita física nem retorno de direção.
 - Conversão assinada, espelhamento, leitura nativa e fallback, voo, salto,
   soltura, ordem, tempo, foco e fluxo de vitória/desconexão exercitados.
 - 788 corpos de métodos anteriores ao helper preservados byte a byte.
-- Limites de pilha/escopo de 49 corpos do helper verificados.
+- Limites de pilha/escopo de 51 corpos do helper verificados.
 - ZIP e manifesto SHA-256 verificados.
 Não houve teste em Windows nem conexão ao servidor do jogo.
 

@@ -1,6 +1,6 @@
 Executed 2026-11-03: Java 21, FFDec 26.4.0, Ruffle 0.7.1, Playwright + Chromium.
-PASS: 163 AVM2 native-keyboard/victory/clock/log assertions; 32 routes decoded; victory independent of route
-PASS: 788 pre-existing method bodies outside RoutePlayerFixed1069 unchanged; 49 helper bodies verified
+PASS: 177 AVM2 native-keyboard/victory/clock/log assertions; 32 routes decoded; victory independent of route
+PASS: 788 pre-existing method bodies outside RoutePlayerFixed1069 unchanged; 51 helper bodies verified
 PASS: full rebuild_precision.sh compilation, verification and runtime test workflow
 
 Workflow changed at user request: recorded time and input drive playback;
@@ -25,3 +25,10 @@ model-specific assertion, not a measurement of real-game precision.
 
 No native movement functions, animation calls, position setters or velocity
 writes are used by the controller. No live-server gameplay or Windows test.
+
+Direction regressions: contradictory mirror metadata reproduced and corrected
+using decisive near-spawn evidence, normal and reflected spawn, recorded turns,
+stable inference across frames, native metadata preserved, central ambiguity,
+late/missing/out-of-range evidence fallback and reset on reactivation. Input
+mapping is shared by apply and velocity feedback to avoid double inversion.
+14 additional assertions; no live-map reproduction was available.

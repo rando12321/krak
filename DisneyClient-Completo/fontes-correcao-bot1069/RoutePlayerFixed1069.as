@@ -47,6 +47,8 @@ package disney {
         private var failure:String = "";
         private var wasAlive:Boolean = false;
         private var mirror:Boolean = false;
+        private var routeMirror:Boolean=false;
+        private var routeMirrorKnown:Boolean=false;
         private var width:Number = 800;
         private var routeStartedAt:int=0;
         private var expectedElapsed:Number=0;
@@ -199,6 +201,28 @@ package disney {
             if(x==null || y==null || !isFinite(Number(x)) || !isFinite(Number(y)))return {x:Number.NaN,y:Number.NaN};
             return {x:Number(x),y:Number(y)};
         }
+        public static function resolveRouteMirror(route:Array,spawnX:Number,mapWidth:Number,reported:Boolean):Boolean {
+            if(!isFinite(spawnX) || !isFinite(mapWidth) || mapWidth<200)return reported;
+            var elapsed:Number=0;
+            for each(var step:Array in route){
+                elapsed+=Number(step[2]);
+                if(elapsed>1500)return reported;
+                if(String(step[1])!="walk")continue;
+                var anchor:Number=int(Number(step[0].x))/100*30;
+                if(anchor<0 || anchor>mapWidth || spawnX<0 || spawnX>mapWidth)return reported;
+                var normalError:Number=Math.abs(spawnX-anchor);
+                var reverseError:Number=Math.abs(spawnX-(mapWidth-anchor));
+                // Only decisive, near-spawn evidence may override metadata.
+                // Central starts, late samples and large drift remain unchanged.
+                var nearSpawn:Number=Math.min(90,mapWidth*0.15);
+                if(Math.min(normalError,reverseError)<=nearSpawn && Math.abs(normalError-reverseError)>=mapWidth*0.35)return reverseError<normalError;
+                return reported;
+            }
+            return reported;
+        }
+        private function routeInput(point:Object):Object {
+            return mirror ? {left:Boolean(point.mr),right:Boolean(point.ml)} : {left:Boolean(point.ml),right:Boolean(point.mr)};
+        }
         private function waypoint(point:Object):Object {
             var x:Number=int(Number(point.x))/100*30;
             if(mirror)x=width-x;
@@ -236,8 +260,8 @@ package disney {
         private function synchronizeMotion(current:Object,now:int):void {
             if(!previousWalk)return;
             var actual:Object=observedVelocity();var reference:Object=referenceVelocity(now);
-            var left:Boolean=Boolean(previousWalk.ml);var right:Boolean=Boolean(previousWalk.mr);
-            if(mirror){var swap:Boolean=left;left=right;right=swap;}
+            var input:Object=routeInput(previousWalk);
+            var left:Boolean=input.left;var right:Boolean=input.right;
             var direction:int=int(right)-int(left);
             // Keyboard feedback trims excess ground speed with release/repress,
             // never by applying an unrecorded opposite direction or editing physics.
@@ -494,7 +518,7 @@ package disney {
         private function update(now:int):void {
             if(!Boolean(root["auto_play"])) {
                 if(running)release();
-                running=false;enabled=false;attempted=false;completed=false;paused=false;failure="";
+                running=false;enabled=false;attempted=false;completed=false;paused=false;failure="";routeMirrorKnown=false;
                 status("Bot: desligado",now);return;
             }
             keys=root["Keys"];
@@ -525,7 +549,7 @@ package disney {
             var respawn:Boolean=alive && (!wasAlive || nextBody!==body || nextPlayer!==player);
             if (newRound || respawn) {
                 if (running) release();
-                running=false;attempted=false;completed=false;paused=false;failure="";settle=now+250;
+                running=false;attempted=false;completed=false;paused=false;failure="";routeMirrorKnown=false;settle=now+250;
             }
             map=nextMap;player=nextPlayer;body=nextBody;code=nextCode;wasAlive=alive;
             root["current_map_code"]=code;root["current_map_code_int"]=int(number);
@@ -541,11 +565,13 @@ package disney {
                 var container:Object=readSlot(map,keys.obj_container,"obj_container");
                 mirror=Boolean(readSlot(container,keys.bot_reverse,"bot_reverse"));
             }
-            root["map_width"]=width;root["reverse_map"]=mirror;
+            // Keep the inferred orientation local; native packet metadata must
+            // remain untouched for recording and other loader features.
+            if(routeMirrorKnown)mirror=routeMirror;
             var active:Boolean=Boolean(root["auto_play"]);
             if (!active) {
                 if (running) release();
-                running=false;enabled=false;attempted=false;completed=false;paused=false;failure="";
+                running=false;enabled=false;attempted=false;completed=false;paused=false;failure="";routeMirrorKnown=false;
                 status("Bot: desligado | "+code,now);return;
             }
             if (!enabled) { enabled=true;attempted=false;completed=false;paused=false;failure="";settle=now+250; }
@@ -567,6 +593,10 @@ package disney {
                 attempted=true;
                 diagnostic("decodeRoute","ANTES");
                 sequence=decodeRoute(String(saved));
+                var spawn:Object=observedPosition();
+                routeMirror=resolveRouteMirror(sequence,Number(spawn.x),width,mirror);routeMirrorKnown=true;
+                diagnostic("direcao","ORIENTACAO","informado="+mirror+" rota="+routeMirror+" inicioX="+spawn.x+" largura="+width);
+                mirror=routeMirror;
                 diagnostic("decodeRoute","DEPOIS","passos="+sequence.length);
                 prepareKeyboard();
                 // Deltas are before each command. The clock drives input;
@@ -612,9 +642,8 @@ package disney {
         private function apply(step:Array):void {
             var action:String=String(step[1]);
             if(action=="walk"){
-                var point:Object=step[0];var left:Boolean=Boolean(point.ml);var right:Boolean=Boolean(point.mr);
-                if(mirror){left=Boolean(point.mr);right=Boolean(point.ml);}
-                movement(left,right,Boolean(point.jump));previousWalk=point;
+                var point:Object=step[0];var input:Object=routeInput(point);
+                movement(Boolean(input.left),Boolean(input.right),Boolean(point.jump));previousWalk=point;
             }else if(action=="crouch" || action=="duck")setKey(40,Number(step[0])!=0);
             // Cheese/hole markers consume time only. Real movement and native
             // game processing handle collection and server-confirmed arrival.
