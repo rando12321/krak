@@ -1,108 +1,117 @@
-Conversão cinética das gravações para teclas — 2026-11-03
+Robô de teclas normais, tempos convertidos e checks — 2026-11-03
 
-Esta versão altera os cálculos do reprodutor e o SWF. Não converte nem substitui
-os mapas/rotas usados pelo cliente. O JSON anexado foi preservado como fixture
-em fontes-correcao-bot1069/fixtures/mapas_e_rotas_por_id.json.
+O executor anterior foi substituído. O SWF prepara estados de teclas e o backend
+local Windows os entrega ao Adobe_10.exe em foco por SendInput com scan codes.
+O robô não chama KeyboardEvent.dispatchEvent para simular teclas nem escreve
+posição, velocidade ou animação do jogador.
 
-Base analisada:
-- 14.128 entradas; 2.205 têm rota e 11.923 não têm gravação.
-- 165.019 passos; 160.217 amostras de movimento.
-- 6.433 intervalos zero e 18.056 intervalos positivos menores que 33 ms.
-- 3 rotas contêm apenas marcadores, sem amostras de movimento.
-- Gravidade mediana estimada: 299,164345 px/s² em 68.183 pares consistentes.
-- Velocidade horizontal modal não nula: 103,5 px/s.
-- Impulso vertical típico: -150 px/s.
-O relatório reproduzível e o SHA-256 do original estão em recorded-calibration.json.
+Uso: veja TECLAS-REAIS-LEIA-ME.txt. Backend e Flash precisam estar no mesmo Windows.
+O iniciador abre o client local em 127.0.0.1. Apenas publicar o SWF em VPS não
+permite que o servidor remoto pressione teclas no computador do jogador.
+A autenticação local, banco e parser do projeto continuam necessários.
 
-Por que repetir mr/ml/jump não bastava:
-As gravações descrevem estados físicos. jump=true não é um evento de tecla:
-124 trechos mostram um reinício forte de vy próximo de -150 px/s enquanto os
-dois registros continuam com jump=true. Um teste balístico com a gravidade
-mediana identifica 268 candidatos a impulso repetido, incluindo casos que só
-ficam evidentes ao considerar o tempo. São candidatos inferidos, não confirmação
-independente de cada salto no jogo.
+Conversão, sem alterar os mapas originais:
+- x/y: normaliza signed32 e converte centésimos de unidade física por *0,3
+  para pixels. Coordenadas negativas também podem vir armazenadas como uint32.
+- vx/vy: signed16 / 100 * 30 para pixels/segundo.
+- Estima gravidade por rota quando há seis pares balísticos consistentes; usa
+  a mediana da base fornecida (299,164345 px/s²) nos demais casos.
+- O sentido de uma etapa vem do deslocamento até o alvo, transformado uma vez
+  pelo espelhamento. Não copia mr/ml quando contradizem esse deslocamento.
+- Tempo horizontal = distância / velocidade de referência * 1000. A referência
+  usa a média das velocidades registradas, limitada à faixa 36,225–103,5 px/s
+  para a entrada normal. O movimento real pode terminar antes ao chegar ao alvo.
+- Exemplo: 103,5 px de deslocamento a 103,5 px/s vira 1000 ms de RIGHT, mesmo que
+  o intervalo antigo para impor vx/vy tenha sido 200 ms.
+- Em um novo impulso de salto, usa vy e gravidade para reconstruir o local de
+  decolagem. Primeiro chega ao local; depois pressiona UP. Uma amostra com
+  vy=-150 px/s representa uma decolagem naquele ponto, não antes de caminhar até ele.
+- Uma amostra já subindo permite estimar a idade do salto:
+    idade = (vy_da_amostra + 150) / gravidade
+  Posição de lançamento estimada a partir da amostra:
+    x_lançamento = x_alvo - vx_da_amostra * idade
+    y_lançamento = y_alvo + 150 * idade - 0,5 * gravidade * idade²
+- O plano pode incluir uma aproximação ao lançamento e uma fase de voo com UP.
+  O tempo de voo considera idade vertical e distância horizontal; UP é um pulso
+  de 80 ms. Para confirmar uma decolagem, exige movimento vertical observado.
+- Estados jump=true sucessivos podem conter impulsos diferentes, detectados por
+  reinício de vy e tempo, não só pela troca do Boolean.
+- Esperas de agachamento e término usam a escala do tempo físico convertido
+  anterior, limitada a 0,1–20 vezes. Marcadores internos de queijo/cosméticos
+  não criam uma espera adicional antes do próximo alvo geométrico.
+- Amostras retas de chão podem formar um único hold; todos os checkpoints
+  originais continuam no plano. DOWN só preserva agachamentos existentes.
 
-Novo cálculo:
-1. Decodifica vx/vy como signed16 / 100 * 30, em pixels/segundo. Ex.: 65036
-   representa -150 px/s. As coordenadas usam centésimos de unidade física.
-2. Cria uma linha de referência temporal em memória, sem escrever nas gravações.
-3. Estima a gravidade de cada rota por pares balísticos consistentes. Usa a
-   mediana geral se houver menos de seis observações válidas naquela rota.
-4. Em segmentos horizontais consistentes, reconstrói posição e velocidade com
-   uma curva cúbica limitada pelas posições e velocidades dos extremos. Saltos
-   de posição legados são marcados como descontínuos e não geram perseguição.
-5. Compara a velocidade real do corpo com a referência cinética. Um erro pequeno
-   de trajetória pode ajustar a velocidade desejada, limitado a 30 px/s ou 25%
-   da referência, o menor valor. Isso nunca manda voltar nem bloqueia um passo.
-6. No chão, modula a direção gravada com soltar/reapertar e histerese. Mantém ao
-   menos 40 ms entre ajustes, preserva a entrada de lançamento/voo e não impõe
-   posição, velocidade, animação ou direção contrária diretamente na física.
-7. Reconstrói um plano de impulsos de salto a partir de vy, gravidade e tempo.
-   Se a amostra já está subindo, estima a decolagem por
-      idade = (vy_da_amostra - vy_do_impulso) / gravidade
-   Só antecipa se essa idade couber no intervalo observado; caso contrário,
-   mantém o instante da amostra. Não extrapola a decolagem para fora da gravação.
-8. Um novo impulso pode gerar KEY_UP seguido de KEY_DOWN mesmo que jump tenha
-   permanecido true. A chegada da amostra posterior não repete o mesmo impulso.
-   Solturas explícitas continuam no tempo gravado.
-9. Não mistura a velocidade do salto futuro por todo o intervalo anterior.
-   A referência vertical considera a fase antes/depois da decolagem calculada.
+Checks e execução:
+- X e Y são lidos a cada quadro; velocidade vem do vetor/getter nativo ou do
+  deslocamento observado. Não há escrita física.
+- Chegada exige janela de 2,5 px em X e 5 px em Y, ou cruzamento observado da
+  elipse entre quadros. Cruzar X na altura errada não confirma chegada.
+- O contador de tempo só começa quando a ponte confirma o estado enviado.
+- O controlador solta a direção ao se aproximar pelo deslocamento previsto ou
+  quando há excesso de velocidade no chão. Nunca inverte para perseguir um alvo
+  que já ficou para trás. Uma virada prevista no plano continua permitida.
+- Tempo vencido não significa chegada. Uma tentativa tem limite de recuperação;
+  ao vencer, registra NAO_CONFIRMADO e continua, mantendo a preferência por não
+  parar o robô. O status conta os pontos não confirmados.
+- Sem posição válida, não movimenta às cegas. Sem ponte nativa, não usa fallback
+  de eventos simulados dentro do SWF.
 
-Tempo e direção:
-- Coordenadas não são condição de avanço. Não há espera por ponto ou retorno
-  para buscar uma coordenada perdida.
-- Amostras repetidas avançam no relógio sem exigir um quadro extra cada uma e
-  sem gerar novas teclas ou reiniciar a modulação.
-- Intervalos explicitamente zero preservam a ordem no mesmo quadro.
-- Transições positivas de direção/agachamento são limitadas por quadro para
-  preservar a duração da entrada real após atrasos grandes.
-- O processamento de amostras e de eventos de salto é limitado a 64 por chamada.
-- Teclas e referência de vx usam o mesmo espelhamento. A validação inicial só
-  corrige metadado contraditório com evidência próxima e não ambígua do início.
-  Em casos ambíguos preserva o espelhamento informado pelo jogo.
-- Controle manual, chat, perda de foco, desconexão, morte e vitória mantêm os
-  fluxos existentes de interrupção e liberação de teclas.
+Ponte Windows:
+- POST /native_keyboard, somente loopback e com sessão/flash_token autenticados.
+- Aceita somente 37/38/39/40, estados completos com sequência e contador de pulso.
+- SendInput usa scan code e EXTENDEDKEY; não repete KEY_DOWN em heartbeats.
+- Solta direção oposta antes de pressionar a nova. Pulso rearmado de UP gera
+  soltura/pressão quando necessário.
+- Requisições antigas não podem reapertar teclas depois de uma soltura mais nova.
+- Uma sessão controla uma janela; outra sessão não toma o controle durante a lease.
+- Perda de foco, desligamento, desconexão ou 500 ms sem heartbeat liberam teclas.
+- O adaptador só aceita Adobe_10.exe em foco. Não força foco em outra aplicação.
+- O SWF coalesce estados assíncronos e acompanha a confirmação antes de iniciar
+  os tempos. O watchdog local evita depender dos quadros do Flash para soltar.
 
-Validação executada:
-- 210 verificações AVM2 passaram no SWF real com Ruffle/Chromium.
-- 32 rotas legadas e todas as 2.205 rotas fornecidas foram decodificadas e
-  planejadas pelo AS3, em lotes. Não é simulação completa dos 2.205 mapas.
-- Endpoints e pontos médios das trajetórias foram verificados quanto a valores
-  finitos; a ordem dos tempos e planos de salto foi preservada em toda a base.
-- Testes específicos verificam impulso sem borda de jump, decolagem anterior
-  à amostra aérea, ausência de impulso duplicado, gravidade por rota, espelho,
-  curvas consistentes e descontinuidades sem perseguição de posição.
-- Permanecem testes de aceleração/atrito simulados, 16/33/50 ms por quadro,
-  velocidades de 30/60/120 px/s, teclado, foco, vitória e desconexão.
-- 788 corpos de métodos anteriores ao helper preservados byte a byte.
-- Pilha/escopo de 59 corpos do helper verificados.
-- SHA-256 do JSON anexado e dos mapas ativos preservado; integridade do ZIP
-  e manifesto ARQUIVOS-SHA256.json verificados.
+Arquivos novos:
+- rotas_teclado_convertidas.json: 2.205 planos LEFT/RIGHT/UP e tempos novos.
+  O export assume a primeira amostra como referência inicial. Em execução, o
+  SWF recalcula a aproximação usando a posição real, não carrega esse começo fixo.
+- DisneyClient/native_keyboard.py e api/native_keyboard.py: driver e protocolo.
+- testes-teclado/test_native_keyboard.py: controlador, ABI, watchdog e endpoint.
+- O JSON fornecido permanece byte a byte na fixture e os mapas ativos não mudaram.
+
+Validação desta arquitetura:
+- 32 verificações AVM2 do novo controlador/conversor, incluindo o handshake HTTP
+  real com servidor de teste, confirmação, soltura e checks de altura/decolagem.
+- 26 testes Python passaram: protocolo, foco, estado fora de ordem, lease/watchdog,
+  ownership, autorização/loopback, SendInput com API simulada e layout Win32.
+- As 2.205 rotas foram convertidas e exportadas, com os 160.217 checkpoints originais.
+- 32 formatos legados decodificados. Tempos/direções convertidos foram verificados
+  quanto a valores finitos e controles permitidos em toda a base.
+- 788 corpos de métodos anteriores ao helper preservados; pilha/escopo de 64
+  corpos do helper verificados. O handler nativo de pacotes continua preservado.
+- O iniciador passa na entrada --help; os módulos alterados passam no parser Python.
+- Integridade dos arquivos de mapas, corpus, export e ZIP verificada.
+As antigas contagens de testes do executor por eventos Flash não descrevem este
+executor novo e não são apresentadas como sua validação.
 
 Limites:
-O robô legado atribuía coordenadas e vx/vy diretamente ao corpo. Teclas não
-reproduzem arbitrariamente uma correção instantânea de posição, impulso externo,
-colisão ou velocidade acima da capacidade do motor. A conversão calcula entradas
-compatíveis e mantém a execução, mas não garante equivalência física exata.
-Não houve teste em Windows nem conexão ao servidor do jogo. Os testes completos
-da base verificam planejamento e integridade, não sucesso em cada mapa real.
+O ambiente de desenvolvimento é Linux. Não foi possível testar SendInput contra
+um Adobe_10.exe real nem jogar os mapas no servidor. Os testes do driver usam API
+simulada, e os do SWF usam uma ponte simulada/servidor HTTP de teste. Não há uma
+alegação de validação física no Windows ou de sucesso em todos os mapas.
+Os mapas antigos podiam impor posição/vx/vy instantaneamente. Trechos que exigem
+teleporte, impulsos externos ou movimento além da capacidade normal não têm
+conversão física exata para setas. Um check não confirmado é reportado, não ocultado.
 
-Reproduzir análise:
+Reproduzir:
+  python3 -m unittest discover -s testes-teclado -v
   python3 fontes-correcao-bot1069/analyze_recorded_routes.py
-O comando apenas lê o original e imprime o relatório. --output permite gravar
-um relatório em outro arquivo; não altera a fixture nem os mapas ativos.
 
-Recompilar e testar:
-Java 21, FFDec 26.4.0, Node.js, Playwright, Chromium e @ruffle-rs/ruffle 0.7.1.
-A entrada deve conter disney.RoutePlayerFixed1069, como neste pacote.
-
+Java 21, FFDec 26.4.0, Node.js, Playwright, Chromium e @ruffle-rs/ruffle 0.7.1:
 FFDEC_HOME=/caminho/ffdec \
 RUFFLE_PACKAGE=/caminho/node_modules/@ruffle-rs/ruffle \
 NODE_PATH=/caminho/node_modules \
+CONVERTED_PLAN_OUTPUT=/caminho/rotas_teclado_convertidas.json \
 bash fontes-correcao-bot1069/rebuild_precision.sh entrada.swf saida.swf
 
-CHROMIUM_PATH seleciona outro Chromium, se necessário. A fixture do corpus
-acompanha o pacote. A saída só é copiada após compilação e testes passarem.
-Os lotes cedem o controle ao navegador; o runner detecta erros AVM2 não tratados.
-PatchBot1069.java/VerifyBot1069.java são históricos e não devem ser reaplicados
-ao SWF que já contém o helper.
+A saída só é copiada depois que os testes passam. O export é gerado pelo mesmo
+conversor AS3 compilado, a partir da fixture completa, não por outro algoritmo.

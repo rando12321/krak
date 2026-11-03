@@ -1,10 +1,12 @@
 # krak
 
-Cliente DisneyClient com conversão das gravações físicas `x/y/vx/vy/tempo` em referência de trajetória e plano de teclas/saltos. Os mapas originais permanecem inalterados.
+Robô refeito para setas reais via Windows SendInput, com tempos/direções convertidos das gravações físicas e checks de chegada em tempo real.
 
-- [Instruções do cliente](DisneyClient-Completo/LEIA-ME-PRIMEIRO.txt)
-- [Novo cálculo, limites e recompilação](DisneyClient-Completo/PRECISAO-TECLADO-LEIA-ME.txt)
-- [Relatório da base fornecida](DisneyClient-Completo/fontes-correcao-bot1069/recorded-calibration.json)
+**Requer backend local no mesmo Windows do Adobe_10.exe, com o jogo em foco.** O iniciador agora abre o endereço local. Publicar só o SWF em uma VPS não envia teclas ao PC do jogador.
+
+- [Como usar](DisneyClient-Completo/TECLAS-REAIS-LEIA-ME.txt)
+- [Cálculo e validação](DisneyClient-Completo/PRECISAO-TECLADO-LEIA-ME.txt)
+- [2.205 planos convertidos](DisneyClient-Completo/rotas_teclado_convertidas.json)
 - [ZIP atualizado](releases/DisneyClient-Follow-Teclado-Precisao.zip)
 
-210 verificações locais passaram; as 2.205 rotas fornecidas foram decodificadas e planejadas pelo AS3, incluindo 160.217 amostras de movimento. Isso valida o planejamento, sem comprovar a reprodução física de todos os mapas no servidor.
+32 verificações do SWF e 26 testes Python passaram, incluindo handshake HTTP, confirmação/soltura, controlador nativo simulado e conversão da base completa. Os mapas originais foram preservados. SendInput no Windows real e a física do servidor ainda precisam ser validados no PC do usuário.

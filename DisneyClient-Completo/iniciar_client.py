@@ -177,7 +177,8 @@ def run():
     if port == parser_port or any(not 1 <= p <= 65535 for p in (port, parser_port)):
         raise RuntimeError('SERVER_PORT e CLIENT_PARSER_PORT devem ser portas diferentes entre 1 e 65535.')
     url = 'http://127.0.0.1:'+str(port)
-    public_url = 'http://207.180.3.127:'+str(port)
+    # Native SendInput must run beside the foreground Flash process.
+    public_url = url
     parser_url = 'http://127.0.0.1:'+str(parser_port)
     token_file=PARSER/'tokens.json'
     if not token_file.is_file():

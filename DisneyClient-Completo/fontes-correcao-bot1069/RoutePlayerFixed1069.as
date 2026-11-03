@@ -1,9 +1,14 @@
-// ActionScript 3 / RoutePlayerFixed1069.as / Flash Player 10.3+ / replay legacy route control states through SWF keyboard events
+// ActionScript 3 / Flash Player 10.3+ / normal Win32 arrow-key plans with live arrival checks
 package disney {
     import flash.display.MovieClip;
     import flash.events.Event;
     import flash.events.KeyboardEvent;
     import flash.text.TextField;
+    import flash.net.URLLoader;
+    import flash.net.URLRequest;
+    import flash.net.URLRequestMethod;
+    import flash.events.IOErrorEvent;
+    import flash.events.SecurityErrorEvent;
     import flash.utils.Dictionary;
     import flash.utils.getTimer;
     import flash.utils.ByteArray;
@@ -70,6 +75,22 @@ package disney {
         private var lastFeedbackAt:int=0;
         private var velocityCoasting:Boolean=false;
         private var heldKeys:Object={};
+        private var keyboardPlan:Array=[];
+        private var taskStartedAt:int=-1;
+        private var taskCreatedAt:int=0;
+        private var taskPulse:int=0;
+        private var taskPrevious:Object;
+        private var nativeReady:Boolean=false;
+        private var nativeError:Boolean=false;
+        private var nativeDirty:Boolean=true;
+        private var nativePending:URLLoader;
+        private var nativeSentAt:int=-1000;
+        private var nativeSeq:int=0;
+        private var nativePulse:int=0;
+        private var nativeAck:Array=[];
+        private var nativeAckPulse:int=0;
+        private var nativeSession:String="";
+        private var missedTargets:int=0;
         private var emittingKey:Boolean=false;
         private var manualKeyHandler:Function;
         private var deactivateHandler:Function;
@@ -80,7 +101,7 @@ package disney {
         private var serverStateRound:String="";
         private var pauseReason:String="Bot: pausado pela tecla; reative Autoplay";
         public function get currentStep():int{return index;}
-        public function get waypointCount():int{return sequence ? sequence.length : 0;}
+        public function get waypointCount():int{return keyboardPlan ? keyboardPlan.length : 0;}
         private var lastStatus:int = -1000;
         public var message:String = "Bot: aguardando jogo";
         public static function attach(target:MovieClip):void {
@@ -95,6 +116,7 @@ package disney {
             if(root.stage){
                 manualKeyHandler=function(event:KeyboardEvent):void{
                     if(emittingKey || !running || !root.stage)return;
+                    if(nativeReady && Boolean(heldKeys[event.keyCode]))return;
                     if(root.stage.focus is TextField && TextField(root.stage.focus).type=="input")return;
                     if(root["auto_play_disable_on_move"] && [37,38,39,40,65,68,83,87].indexOf(event.keyCode)>=0)pause();
                 };
@@ -178,22 +200,54 @@ package disney {
             if(game && game.stage===root.stage)root.stage.focus=game;else root.stage.focus=null;
         }
         private function emitKey(code:uint,down:Boolean):void {
-            if(!root.stage)throw new Error("palco do teclado indisponivel",2010);
-            var stage:flash.display.Stage=root.stage;
-            var game:flash.display.DisplayObject=root["tfm"] as flash.display.DisplayObject;
-            var target:flash.events.IEventDispatcher=game && game.stage===stage ? game : stage;
-            var previousFocus:flash.display.InteractiveObject=stage.focus;
-            var manualFlag:Boolean=Boolean(root["auto_play_disable_on_move"]);
-            emittingKey=true;root["auto_play_disable_on_move"]=false;
-            try{
-                if(!down && stage.focus is TextField && TextField(stage.focus).type=="input")stage.focus=null;
-                diagnosticFrame=true;diagnostic("teclado","ANTES","codigo="+code+" "+(down ? "KEY_DOWN" : "KEY_UP"));
-                target.dispatchEvent(new KeyboardEvent(down ? KeyboardEvent.KEY_DOWN : KeyboardEvent.KEY_UP,true,false,0,code));
-                diagnostic("teclado","DEPOIS","codigo="+code);
-            }finally{
-                root["auto_play_disable_on_move"]=manualFlag;emittingKey=false;
-                if(!down && previousFocus && previousFocus.stage===stage)restoreFocus(previousFocus);
+            // No KeyboardEvent.dispatchEvent: delivery is through Windows SendInput.
+            if(code==38 && down)nativePulse++;
+            nativeDirty=true;
+        }
+        private function desiredKeys():Array {
+            var result:Array=[];for each(var key:int in [37,38,39,40])if(Boolean(heldKeys[key]))result.push(key);return result;
+        }
+        private function acknowledgeKeys(result:Object,pulse:int):void {
+            if(!result || result.success!==true){keyboardFailure(result && result.message ? String(result.message) : "Ponte local de teclado indisponivel");return;}
+            nativeReady=true;nativeAck=result.keys as Array;nativeAckPulse=pulse;
+        }
+        private function keyboardFailure(message:String):void {
+            nativeError=true;nativeReady=false;running=false;release();
+            failure="Bot: "+message+" | use o backend local no Windows e Adobe_10.exe em foco";
+            status(failure,getTimer());
+        }
+        private function flushKeyboard(now:int):void {
+            if(nativeSession=="")nativeSession=String(getTimer())+"-"+String(int(Math.random()*2147483647));
+            if(nativeError && desiredKeys().length==0)return;
+            if(nativePending){
+                if(now-nativeSentAt<300)return;
+                try{nativePending.close();}catch(ignoredClose:Error){}nativePending=null;nativeDirty=true;
             }
+            if(!nativeDirty && now-nativeSentAt<100)return;
+            if(now-nativeSentAt<20)return;
+            nativeSentAt=now;nativeDirty=false;
+            var state:Object={session:nativeSession,seq:++nativeSeq,keys:desiredKeys(),pulse:nativePulse};
+            var sink:Function=safeRead(root,"native_keyboard_sink") as Function;
+            if(sink!=null){try{acknowledgeKeys(sink(state),int(state.pulse));}catch(mockError:Error){keyboardFailure(mockError.message);}return;}
+            try{
+                var loader:URLLoader=new URLLoader();nativePending=loader;
+                loader.addEventListener(Event.COMPLETE,function(event:Event):void{
+                    if(nativePending!==loader)return;nativePending=null;
+                    try{acknowledgeKeys(com.adobe.serialization.json.JSON.decode(String(loader.data)),int(state.pulse));}catch(error:Error){keyboardFailure("Resposta invalida da ponte de teclado");}
+                });
+                var failed:Function=function(event:Event):void{
+                    if(nativePending!==loader)return;nativePending=null;
+                    try{var result:Object=com.adobe.serialization.json.JSON.decode(String(loader.data));keyboardFailure(String(result.message || "Falha na ponte local de teclado"));}catch(ignoredResponse:Error){keyboardFailure("Nao foi possivel acessar a ponte local de teclado");}
+                };
+                loader.addEventListener(IOErrorEvent.IO_ERROR,failed);loader.addEventListener(SecurityErrorEvent.SECURITY_ERROR,failed);
+                var request:URLRequest=new URLRequest(String(root["host_url"])+"native_keyboard?access_token="+encodeURIComponent(String(root["access_token"]))+"&flash_token="+encodeURIComponent(String(root["tfmdisney"].data.flash_token)));
+                request.method=URLRequestMethod.POST;request.contentType="application/json";request.data=com.adobe.serialization.json.JSON.encode(state);loader.load(request);
+            }catch(error:Error){nativePending=null;keyboardFailure("Nao foi possivel iniciar a ponte local de teclado");}
+        }
+        private function keyboardAcknowledged():Boolean {
+            if(!nativeReady || nativeAck==null || nativeAckPulse<taskPulse)return false;
+            var desired:Array=desiredKeys();if(desired.length!=nativeAck.length)return false;
+            for each(var key:int in desired)if(nativeAck.indexOf(key)<0)return false;return true;
         }
         private function observedPosition():Object {
             var getter:Function=safeRead(body,safeRead(keys,"get_x_form")) as Function;
@@ -214,7 +268,7 @@ package disney {
             for each(var step:Array in route){
                 elapsed+=Number(step[2]);
                 if(elapsed>1500)return reported;
-                if(String(step[1])!="walk")continue;
+                if(String(step[step.length-2])!="walk")continue;
                 var anchor:Number=int(Number(step[0].x))/100*30;
                 if(anchor<0 || anchor>mapWidth || spawnX<0 || spawnX>mapWidth)return reported;
                 var normalError:Number=Math.abs(spawnX-anchor);
@@ -252,7 +306,7 @@ package disney {
         public static function estimateRouteGravity(route:Array):Number {
             var estimates:Array=[];var before:Object=null;var beforeTime:Number=0;var time:Number=0;
             for each(var step:Array in route){
-                time+=Number(step[2]);if(String(step[1])!="walk")continue;
+                time+=Number(step[step.length-1]);if(String(step[step.length-2])!="walk")continue;
                 var point:Object=step[0];
                 if(before){
                     var seconds:Number=(time-beforeTime)/1000;
@@ -272,8 +326,8 @@ package disney {
         public static function buildTrajectory(route:Array):Array {
             var result:Array=[];result["gravity"]=estimateRouteGravity(route);var time:Number=0;
             for each(var step:Array in route){
-                time+=Number(step[2]);
-                if(String(step[1])=="walk")result.push({time:time,point:step[0]});
+                time+=Number(step[step.length-1]);
+                if(String(step[step.length-2])=="walk")result.push({time:time,point:step[0]});
             }
             return result;
         }
@@ -292,7 +346,7 @@ package disney {
             if(gravity<=0)gravity=estimateRouteGravity(route);
             var plan:Array=[];var time:Number=0;var before:Object=null;var beforeTime:Number=0;
             for each(var step:Array in route){
-                time+=Number(step[2]);if(String(step[1])!="walk")continue;
+                time+=Number(step[step.length-1]);if(String(step[step.length-2])!="walk")continue;
                 var point:Object=step[0];
                 if(requiresJumpEdge(before,point,time-beforeTime,gravity)){
                     var launch:Number=time;var vy:Number=recordedVelocity(Number(point.vy));
@@ -306,18 +360,6 @@ package disney {
                 before=point;beforeTime=time;
             }
             return plan;
-        }
-        private function recordedPhase(now:int):Number {
-            return Math.max(lastWalkRecordedAt,expectedElapsed-Math.max(0,due-now));
-        }
-        private function advanceJumpPlan(now:int):void {
-            var phase:Number=recordedPhase(now);var count:int=0;
-            while(jumpPlanIndex<jumpPlan.length && Number(jumpPlan[jumpPlanIndex].time)<=phase && count<64){
-                var event:Object=jumpPlan[jumpPlanIndex++];count++;
-                if(Boolean(event.down) && Boolean(heldKeys[38]))setKey(38,false);
-                setKey(38,Boolean(event.down));
-                diagnosticFrame=true;diagnostic("salto.calculado",Boolean(event.down) ? "IMPULSO" : "SOLTAR","tempoGravado="+Number(event.time).toFixed(1)+"ms fase="+phase.toFixed(1)+"ms");
-            }
         }
         public static function sampleTrajectory(samples:Array,time:Number,reflected:Boolean,mapWidth:Number):Object {
             if(!samples || samples.length==0)return null;
@@ -364,47 +406,96 @@ package disney {
             }
             return {x:reflected ? mapWidth-x : x,y:y,vx:reflected ? -vx : vx,vy:vy,continuousX:continuousX};
         }
-        private function referenceVelocity(now:int):Object {
-            var phase:Number=recordedPhase(now);
-            return sampleTrajectory(trajectory,phase,mirror,width);
+        public static function convertKeyboardPlan(route:Array,startX:Number,startY:Number,reflected:Boolean,mapWidth:Number,runSpeed:Number=103.5):Array {
+            var result:Array=[];var x:Number=startX;var y:Number=startY;var before:Object=null;var oldSinceWalk:Number=0;var gravity:Number=estimateRouteGravity(route);var scale:Number=1;var heldDirection:int=0;var down:Boolean=false;
+            for(var source:int=0;source<route.length;source++){
+                var step:Array=route[source];var delay:Number=Number(step[step.length-1]);oldSinceWalk+=delay;var action:String=String(step[step.length-2]);
+                if(action!="walk"){
+                    if(delay>0 && (action=="crouch" || action=="duck" || source==route.length-1))result.push({kind:"wait",direction:heldDirection,down:down,jump:false,holdMs:Math.max(0,delay*scale),source:source,oldMs:delay,checks:[]});
+                    if(action=="crouch" || action=="duck"){down=Number(step[0])!=0;result.push({kind:"wait",direction:heldDirection,down:down,jump:false,holdMs:0,source:source,oldMs:0,checks:[]});}
+                    continue;
+                }
+                var point:Object=step[0];var tx:Number=int(Number(point.x))*0.3;if(reflected)tx=mapWidth-tx;var ty:Number=int(Number(point.y))*0.3;
+                var dx:Number=tx-x;var dy:Number=ty-y;var direction:int=Math.abs(dx)>2 ? (dx>0 ? 1 : -1) : 0;
+                var speed:Number=Math.abs(recordedVelocity(Number(point.vx)));
+                if(before)speed=(speed+Math.abs(recordedVelocity(Number(before.vx))))/2;
+                speed=Math.min(runSpeed,Math.max(runSpeed*0.35,speed));
+                var impulse:Boolean=requiresJumpEdge(before,point,oldSinceWalk,gravity);
+                var hold:Number=direction==0 ? 0 : Math.abs(dx)/speed*1000;var segmentApproach:Number=0;
+                if(impulse){
+                    // The recorded point may already be in flight: reconstruct
+                    // the launch position, walk there, then press UP. A fresh
+                    // -150px/s sample launches at its own position, not before it.
+                    var sampleVy:Number=recordedVelocity(Number(point.vy));
+                    var age:Number=sampleVy>=-150 && sampleVy<0 ? (sampleVy+150)/gravity : 0;
+                    var sampleVx:Number=recordedVelocity(Number(point.vx));if(reflected)sampleVx=-sampleVx;
+                    var launchX:Number=tx-sampleVx*age;var launchY:Number=ty+150*age-0.5*gravity*age*age;
+                    var approachX:Number=launchX-x;var approachY:Number=launchY-y;
+                    if(Math.abs(approachX)>2.5 || Math.abs(approachY)>5){
+                        var approachDirection:int=Math.abs(approachX)>2.5 ? (approachX>0 ? 1 : -1) : 0;
+                        var approachMs:Number=Math.max(Math.abs(approachX)/speed*1000,Math.abs(approachY)>5 ? Math.sqrt(2*Math.abs(approachY)/gravity)*1000 : 0);
+                        segmentApproach=Math.min(60000,approachMs);
+                        result.push({kind:"move",direction:approachDirection,down:down,jump:false,holdMs:Math.min(60000,approachMs),targetX:launchX,targetY:launchY,speed:speed,source:source,oldMs:oldSinceWalk,checks:[],fromX:x,fromY:y,virtualLaunch:true});
+                        x=launchX;y=launchY;
+                    }
+                    dx=tx-x;dy=ty-y;direction=Math.abs(dx)>2.5 ? (dx>0 ? 1 : -1) : 0;
+                    hold=Math.max(80,age*1000,Math.abs(dx)/speed*1000);
+                }else if(direction==0 && Math.abs(dy)>6){var fall:Number=Math.sqrt(2*Math.abs(dy)/gravity)*1000;hold=Math.max(hold,fall);}
+                else if(direction==0 && Math.abs(dy)<=6 && !Boolean(point.mr) && !Boolean(point.ml))hold=delay;
+                if(oldSinceWalk>0 && hold+segmentApproach>0)scale=Math.max(0.1,Math.min(20,(hold+segmentApproach)/oldSinceWalk));
+                var task:Object={kind:direction!=0 || Math.abs(dy)>6 || impulse ? "move" : "wait",direction:direction,down:down,jump:impulse,holdMs:Math.max(0,Math.min(60000,hold)),targetX:tx,targetY:ty,speed:speed,source:source,oldMs:oldSinceWalk,checks:[{x:tx,y:ty,source:source}],fromX:x,fromY:y};
+                // Ground samples in the same straight run form one hold with
+                // every original position retained as a live checkpoint.
+                var previous:Object=result.length ? result[result.length-1] : null;
+                if(previous && previous.kind=="move" && task.kind=="move" && previous.direction==direction && direction!=0 && !previous.jump && !task.jump && previous.down==down && Math.abs(Number(previous.targetY)-Number(previous.fromY))<=2 && Math.abs(dy)<=2 && Math.abs(recordedVelocity(Number(point.vy)))<24){
+                    previous.holdMs+=task.holdMs;previous.targetX=tx;previous.targetY=ty;previous.checks.push(task.checks[0]);previous.source=source;
+                }else result.push(task);
+                x=tx;y=ty;before=point;oldSinceWalk=0;heldDirection=direction;
+            }
+            return result;
         }
-        private function synchronizeMotion(current:Object,now:int):void {
-            if(!previousWalk)return;
-            var actual:Object=observedVelocity();var reference:Object=referenceVelocity(now);
-            var input:Object=routeInput(previousWalk);
-            var left:Boolean=input.left;var right:Boolean=input.right;
-            var direction:int=int(right)-int(left);
-            // Keyboard feedback trims excess ground speed with release/repress,
-            // never by applying an unrecorded opposite direction or editing physics.
-            var canTrim:Boolean=Boolean(actual.valid) && direction!=0 && !Boolean(previousWalk.jump) && !Boolean(heldKeys[38]) && Math.abs(Number(actual.vy))<24 && Math.abs(Number(reference.vy))<24 && Number(reference.vx)*direction>6;
-            if(canTrim){
-                var expected:Number=Number(reference.vx)*direction;
-                // Small tracking error becomes bounded speed feedback, never
-                // a position gate, teleport or an opposite-direction command.
-                var errorX:Number=Number(reference.x)-Number(current.x);
-                if(Boolean(reference.continuousX) && isFinite(errorX) && Math.abs(errorX)<=90){
-                    var correctionLimit:Number=Math.min(30,expected*0.25);
-                    expected+=Math.max(-correctionLimit,Math.min(correctionLimit,errorX*direction*2));
-                }
-                var observed:Number=Number(actual.vx)*direction;
-                var band:Number=Math.max(9,expected*0.12);
-                if(!velocityCoasting && observed>expected+band)velocityCoasting=true;
-                else if(velocityCoasting && observed<expected+band/2)velocityCoasting=false;
-            }else velocityCoasting=false;
-            if(now-lastFeedbackAt>=40){
-                var wantLeft:Boolean=left && !velocityCoasting;
-                var wantRight:Boolean=right && !velocityCoasting;
-                if(Boolean(heldKeys[37])!=wantLeft || Boolean(heldKeys[39])!=wantRight){
-                    if(!wantLeft)setKey(37,false);if(!wantRight)setKey(39,false);
-                    if(wantLeft)setKey(37,true);if(wantRight)setKey(39,true);
-                    lastFeedbackAt=now;
-                }
+        private function targetReached(previous:Object,current:Object,x:Number,y:Number):Boolean {
+            if(Math.abs(Number(current.x)-x)<=2.5 && Math.abs(Number(current.y)-y)<=5)return true;
+            if(!previous)return false;
+            var dx:Number=(Number(current.x)-Number(previous.x))/2.5;var dy:Number=(Number(current.y)-Number(previous.y))/5;
+            var length:Number=dx*dx+dy*dy;if(length<0.0001)return false;
+            var ax:Number=(Number(previous.x)-x)/2.5;var ay:Number=(Number(previous.y)-y)/5;var t:Number=-(ax*dx+ay*dy)/length;
+            if(t<0 || t>1)return false;return (ax+t*dx)*(ax+t*dx)+(ay+t*dy)*(ay+t*dy)<=1;
+        }
+        private function executeKeyboardPlan(now:int,current:Object):void {
+            if(!nativeReady){status("Bot: aguardando ponte de teclas reais",now);return;}
+            if(!isFinite(Number(current.x)) || !isFinite(Number(current.y))){release();status("Bot: aguardando posicao para os checks",now);return;}
+            if(index>=keyboardPlan.length){completed=true;running=false;release();return;}
+            var task:Object=keyboardPlan[index];
+            if(taskCreatedAt<0){
+                taskCreatedAt=now;taskStartedAt=-1;taskPrevious=null;
+                if(Boolean(task.jump) && Boolean(heldKeys[38]))setKey(38,false);
+                movement(int(task.direction)<0,int(task.direction)>0,Boolean(task.jump));setKey(40,Boolean(task.down));taskPulse=nativePulse;
+                if(!keyboardAcknowledged())flushKeyboard(now);
+                diagnosticFrame=true;diagnostic("plano.teclas","INICIAR","passo="+index+" tecla="+(int(task.direction)<0 ? "LEFT" : int(task.direction)>0 ? "RIGHT" : "NEUTRAL")+" UP="+task.jump+" antigo="+task.oldMs+"ms convertido="+Number(task.holdMs).toFixed(1)+"ms");
             }
-            if(now-lastMotionLogAt>=500){
-                lastMotionLogAt=now;diagnosticFrame=true;
-                var target:Object=reference;
-                diagnostic("movimento","MEDIDO","vx="+Number(actual.vx).toFixed(1)+" vy="+Number(actual.vy).toFixed(1)+"px/s gravado="+Number(reference.vx).toFixed(1)+","+Number(reference.vy).toFixed(1)+"px/s fonte="+actual.source+" valido="+actual.valid+" modulacao="+velocityCoasting+" erroXY="+(target.x-current.x).toFixed(1)+","+(target.y-current.y).toFixed(1)+"px; referencia cinetica sem bloquear passos");
+            if(taskStartedAt<0){if(!keyboardAcknowledged())return;taskStartedAt=now;}
+            var elapsed:int=now-taskStartedAt;var actual:Object=observedVelocity();
+            if(Boolean(task.jump) && elapsed>=80)setKey(38,false);
+            if(Boolean(task.jump) && ((Boolean(actual.valid) && Number(actual.vy)<-30) || Number(current.y)<Number(task.fromY)-3))task.jumpObserved=true;
+            var launchPoint:Boolean=Boolean(task.jump) && Math.abs(Number(task.targetX)-Number(task.fromX))<=2.5 && Math.abs(Number(task.targetY)-Number(task.fromY))<=5 && Math.abs(Number(current.x)-Number(task.targetX))<=2.5;
+            var reached:Boolean=task.kind=="move" && (!Boolean(task.jump) || Boolean(task.jumpObserved)) && elapsed>=(Boolean(task.jump) ? 80 : 0) && (launchPoint || targetReached(taskPrevious,current,Number(task.targetX),Number(task.targetY)));
+            for each(var checkpoint:Object in task.checks)if(!Boolean(checkpoint.reached) && targetReached(taskPrevious,current,Number(checkpoint.x),Number(checkpoint.y))){checkpoint.reached=true;diagnosticFrame=true;diagnostic("check","CHEGOU","origem="+checkpoint.source+" x="+checkpoint.x+" y="+checkpoint.y);}
+            var limit:Number=Number(task.holdMs)+Math.max(400,Math.min(2000,Number(task.holdMs)*0.75));
+            if((task.kind=="wait" && elapsed>=Number(task.holdMs)) || reached || elapsed>limit){
+                if(task.kind=="move" && !reached){missedTargets++;diagnosticFrame=true;diagnostic("check","NAO_CONFIRMADO","origem="+task.source+" erro="+(Number(task.targetX)-Number(current.x)).toFixed(1)+","+(Number(task.targetY)-Number(current.y)).toFixed(1)+"px; continuar sem retorno");}
+                index++;taskCreatedAt=-1;taskStartedAt=-1;
+                if(index>=keyboardPlan.length){completed=true;running=false;release();status("Bot: plano finalizado | pontos nao confirmados="+missedTargets,now);}return;
             }
+            if(task.kind=="move"){
+                var dx:Number=Number(task.targetX)-Number(current.x);var direction:int=int(task.direction);var steer:Boolean=direction!=0 && dx*direction>2.5;
+                // Coast near the target using observed speed, not the old hold.
+                if(steer && Boolean(actual.valid) && Number(actual.vx)*direction>0 && Math.abs(dx)<=Math.max(2.5,Math.abs(Number(actual.vx))*0.025))steer=false;
+                if(steer && !Boolean(task.jump) && Boolean(actual.valid) && Math.abs(Number(actual.vy))<24 && Number(actual.vx)*direction>Number(task.speed)+12)steer=false;
+                setKey(37,steer && direction<0);setKey(39,steer && direction>0);
+            }
+            taskPrevious={x:current.x,y:current.y};
+            status("Bot: teclas reais | "+index+"/"+keyboardPlan.length+" | tempo="+elapsed+"/"+Math.round(Number(task.holdMs))+"ms | checks falhos="+missedTargets,now);
         }
         private function restoreFocus(focus:flash.display.InteractiveObject):void {
             try{root.stage.focus=focus;}catch(ignoredFocus:Error){}
@@ -521,6 +612,9 @@ package disney {
             return route;
         }
         public function advance(now:int):void {
+            advanceInternal(now);flushKeyboard(now);
+        }
+        private function advanceInternal(now:int):void {
             if(disconnected)return;
             scanConnections(now);
             if(disconnected)return;
@@ -615,6 +709,8 @@ package disney {
             trace("disconnect");debugLines.push("disconnect");
             diagnosticFrame=true;diagnostic("disconnect","ANTES",channel+" "+reason);
             cancelLegacy();release();running=false;paused=true;enabled=false;observedActive=false;
+            if(nativePending){try{nativePending.close();}catch(ignoredNativeClose:Error){}nativePending=null;}
+            nativeSentAt=-1000;flushKeyboard(getTimer());
             message="disconnect | Autoplay parado e log congelado | reabra o cliente";
             diagnostic("disconnect","CONGELADO",channel+" "+reason);
             refreshDiagnostic(true);
@@ -692,7 +788,7 @@ package disney {
                 running=false;enabled=false;attempted=false;completed=false;paused=false;failure="";routeMirrorKnown=false;
                 status("Bot: desligado | "+code,now);return;
             }
-            if (!enabled) { enabled=true;attempted=false;completed=false;paused=false;failure="";settle=now+250; }
+            if (!enabled) {nativeError=false;nativeReady=false;nativeDirty=true; enabled=true;attempted=false;completed=false;paused=false;failure="";settle=now+250; }
             if (!alive) { wait("Bot: aguardando renascer | "+code,now);return; }
             if (paused) {status(pauseReason,now);return;}
             if (now<settle || !keys.move_class || !keys.move_class[keys.move_free] || (keys.timer_class && keys.timer_class[keys.timer_prop])) {
@@ -710,17 +806,19 @@ package disney {
                 if (!saved) { status("Bot: sem rota salva para "+code,now);return; }
                 attempted=true;
                 diagnostic("decodeRoute","ANTES");
-                sequence=decodeRoute(String(saved));trajectory=buildTrajectory(sequence);jumpPlan=buildJumpPlan(sequence,Number(trajectory["gravity"]));jumpPlanIndex=0;
+                sequence=decodeRoute(String(saved));
                 var spawn:Object=observedPosition();
                 routeMirror=resolveRouteMirror(sequence,Number(spawn.x),width,mirror);routeMirrorKnown=true;
                 diagnostic("direcao","ORIENTACAO","informado="+mirror+" rota="+routeMirror+" inicioX="+spawn.x+" largura="+width);
                 mirror=routeMirror;
+                if(!isFinite(Number(spawn.x)) || !isFinite(Number(spawn.y))){attempted=false;status("Bot: aguardando posicao para converter a rota",now);return;}
+                keyboardPlan=convertKeyboardPlan(sequence,Number(spawn.x),Number(spawn.y),mirror,width);
                 diagnostic("decodeRoute","DEPOIS","passos="+sequence.length);
                 prepareKeyboard();
                 // Deltas are before each command. The clock drives input;
                 // position observations never postpone or consume commands.
                 index=0;completed=false;routeStartedAt=now;lastAppliedAt=now;lastPosition=null;lastPositionAt=-1;measuredVx=0;measuredVy=0;velocitySampleValid=false;previousWalk=null;lastWalkRecordedAt=0;lastMotionLogAt=-1000;lastFeedbackAt=now;velocityCoasting=false;expectedElapsed=Number(sequence[0][2]);
-                due=now+expectedElapsed;running=true;
+                due=now+expectedElapsed;index=0;taskCreatedAt=-1;taskStartedAt=-1;missedTargets=0;running=true;
                 diagnostic("iniciarRota","DEPOIS","passos="+sequence.length+" espera gravada="+expectedElapsed+"ms | sem antecipacao");
             }
             if (!running) {status(completed ? "Bot: comandos da rota finalizados | "+code+" | aguardando proxima rodada" : "Bot: aguardando inicio da rota | "+code,now);return;}
@@ -731,60 +829,8 @@ package disney {
             measuredVy=validPositions && sampleMs>0 && sampleMs<=250 ? (currentPosition.y-previousPosition.y)*1000/sampleMs : 0;
             velocitySampleValid=validPositions && sampleMs>0 && sampleMs<=250;
             lastPosition=currentPosition;lastPositionAt=now;
-            advanceJumpPlan(now);
-            // Consume dense unchanged samples on the recorded clock, not one
-            // frame per sample. Emit at most one timed input transition/frame;
-            // explicit zero-delta commands retain their recorded same-frame order.
-            var processed:int=0;var timedTransitions:int=0;
-            while (running && now>=due && processed<64) {
-                var inputChanged:Boolean=changesInput(sequence[index]);
-                if(inputChanged && timedTransitions>0 && Number(sequence[index][2])>0)break;
-                if(inputChanged)timedTransitions++;
-                processed++;
-                if(now-due>750){
-                    diagnosticFrame=true;diagnostic("relogio","CONTINUAR","atraso="+Math.round(now-due)+"ms; executar um comando e preservar o proximo intervalo");
-                }
-                diagnosticFrame=true;
-                diagnostic("apply","ANTES","passo="+index+" acao="+sequence[index][1]+" atraso="+Math.max(0,now-due)+"ms intervalo="+Number(sequence[index][2])+"ms mantido="+(now-lastAppliedAt)+"ms gravadoTotal="+expectedElapsed+"ms decorrido="+(now-routeStartedAt)+"ms atual="+currentPosition.x.toFixed(1)+","+currentPosition.y.toFixed(1));
-                apply(sequence[index]);lastAppliedAt=now;if(inputChanged){lastFeedbackAt=now;velocityCoasting=false;}index++;
-                diagnostic("apply","DEPOIS","passos="+index+"/"+sequence.length);
-                if (index>=sequence.length) {
-                    completed=true;running=false;release();diagnostic("concluirRota","DEPOIS","todos os passos executados");
-                } else {
-                    var nextInterval:Number=Number(sequence[index][2]);
-                    expectedElapsed+=nextInterval;
-                    var frameLateness:Number=Math.max(0,now-due);
-                    // Keep the recorded phase across normal frame quantization.
-                    // Large stalls rebase instead of compressing commands into a burst.
-                    var nextChanges:Boolean=changesInput(sequence[index]);
-                    var retainPhase:Boolean=nextInterval==0 || !nextChanges || (!inputChanged && timedTransitions==0) || (frameLateness<=50 && frameLateness<=nextInterval/2);
-                    // Catching up passive samples must not erase the hold of a
-                    // key transition actually emitted in this frame.
-                    if(nextChanges && nextInterval>0 && inputChanged && due+nextInterval<=now)retainPhase=false;
-                    due=retainPhase ? due+nextInterval : lastAppliedAt+nextInterval;
-                    diagnostic("relogio.teclado","AGENDADO","intervalo="+nextInterval+"ms atrasoQuadro="+frameLateness+"ms fasePreservada="+retainPhase+" proximo="+due+"ms");
-                }
-            }
-            if(running){advanceJumpPlan(now);synchronizeMotion(currentPosition,now);}
-            status(running ? "Bot: reproduzindo "+code+" | "+index+"/"+sequence.length : "Bot: comandos da rota finalizados | "+code,now);
+            for(var executeCount:int=0;running && executeCount<16;executeCount++){var beforeIndex:int=index;executeKeyboardPlan(now,currentPosition);if(index==beforeIndex)break;}
         }
-        private function changesInput(step:Array):Boolean {
-            // Completing releases all owned keys and is a real input transition.
-            if(sequence!=null && step===sequence[sequence.length-1])return true;
-            var action:String=String(step[1]);
-            if(action=="walk")return previousWalk==null || Boolean(previousWalk.ml)!=Boolean(step[0].ml) || Boolean(previousWalk.mr)!=Boolean(step[0].mr);
-            if(action=="crouch" || action=="duck")return Boolean(heldKeys[40])!=(Number(step[0])!=0);
-            return false;
-        }
-        private function apply(step:Array):void {
-            var action:String=String(step[1]);
-            if(action=="walk"){
-                var point:Object=step[0];var input:Object=routeInput(point);
-                if(changesInput(step))movement(Boolean(input.left),Boolean(input.right),Boolean(heldKeys[38]));
-                previousWalk=point;lastWalkRecordedAt=expectedElapsed;
-            }else if(action=="crouch" || action=="duck")setKey(40,Number(step[0])!=0);
-            // Cheese/hole markers consume time only. Real movement and native
-            // game processing handle collection and server-confirmed arrival.
-        }
+
     }
 }

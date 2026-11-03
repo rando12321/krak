@@ -69,6 +69,8 @@ def create_app():
     from api.diagnostics import Diagnostics
     from api.native_patch import NativePatch, restore_native
     from native_wj import NativeWj
+    from native_keyboard import KeyboardController
+    from api.native_keyboard import NativeKeyboard, release_keyboard
     import resources
     root = infrastructure.ROOT
     config = json.loads((root / 'config.json').read_text())
@@ -78,6 +80,9 @@ def create_app():
                parser_url=os.getenv('TFM_PARSER_ENDPOINT', '').rstrip('/'),
                parser_token=os.getenv('TFM_PARSER_API_TOKEN', ''))
     app["diagnostics_rate"] = {}
+    app["native_keyboard"] = KeyboardController()
+    app.on_cleanup.append(release_keyboard)
+    app.router.add_view("/native_keyboard", NativeKeyboard)
     app["native_wj"] = NativeWj()
     app["native_lock"] = asyncio.Lock()
     app["native_rates"] = {}

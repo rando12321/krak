@@ -1,28 +1,32 @@
-Executed 2026-11-03: Java 21, FFDec 26.4.0, Ruffle 0.7.1, Playwright + Chromium.
-PASS: 210 AVM2 assertions; 32 legacy + 2205 supplied routes; 160217 motion snapshots planned
-PASS: 788 pre-existing method bodies outside RoutePlayerFixed1069 unchanged; 59 helper bodies verified
-PASS: full rebuild_precision.sh compilation, verification and runtime test workflow
-PASS: Python validation/calibration of all supplied snapshots
+Executed 2026-11-03: Java 21, FFDec 26.4.0, Ruffle 0.7.1, Playwright + Chromium; Python 3.12 + aiohttp.
+PASS: 32 AVM2 assertions; 32 legacy + 2205 supplied routes; real-keyboard plans validated
+PASS: exported 2205 converted keyboard plans
+PASS: 788 pre-existing method bodies outside RoutePlayerFixed1069 unchanged; 64 helper bodies verified
+PASS: 26 Python unittest tests for native keyboard controller, Win32 adapter model and HTTP endpoint
+PASS: launcher --help and parsing of changed backend modules
 
-The actual AS3 decoder and planner processed all 2,205 supplied nonempty routes,
-165,019 commands and 160,217 motion samples. Three routes contain markers only.
-All trajectory endpoints/midpoints were finite, and source timestamps and jump
-plans were ordered. Tests assert 268 repeated impulse candidates with the corpus
-median gravity. Route-specific planning may use its own calibrated gravity.
-Original fixture bytes and active maps/record files are preserved.
+This is a replacement controller, not the earlier SWF-event executor. Old test
+counts are not carried forward as claims for this implementation.
 
-New runtime regressions exercise signed units, velocity-constrained trajectory,
-mirroring, no mutation of input snapshots, discontinuity handling, vy reset while
-jump stays true, duplicate-airborne suppression, explicit release, inferred
-launch before the airborne snapshot, no duplicate impulse on sample arrival,
-vertical phase before/after launch and per-route gravity calibration.
-Existing keyboard, clock/dense timing, native victory, focus/manual interruption,
-disconnect/logging and acceleration/drag model checks remain covered.
+AS3: converted displacement/duration instead of old vx/vy timing, direction from
+geometry, reflection, original input immutability, no Flash key dispatch,
+native state acknowledgment, live arrival/height checks, jump approach then UP,
+observed impulse, no blind movement without coordinates, unavailable bridge
+without fake fallback, disable/disconnect release and native packet wrapper.
+The actual URLLoader path talks to a Node HTTP test bridge; the runner verifies
+that RIGHT was received and that the final state releases all keys.
 
-Corpus validation imports setTimeout, yields between batches, reports progress,
-and fails on uncaught AVM2 runtime errors. The final full run completed all
-2,205 routes. The test SWF/harness is separate from the shipped production SWF.
+All 2205 supplied nonempty routes were decoded and converted by compiled AS3.
+160217 original motion checkpoints were retained. Converted holds are finite and
+nonnegative and directions are -1/0/1. The output JSON is exported from those
+actual AS3 plans. 3 marker-only routes remain without inferable motion.
 
-No live-server gameplay, complete real-map simulation or Windows validation.
-Planner coverage is not evidence that every map can be reproduced exactly with
-keyboard inputs when the old snapshots contain instantaneous physical writes.
+Python: full state ordering, stale request rejection, opposite-key release order,
+UP pulse rearming, focus identity, non-Flash rejection, explicit release without
+focus, ownership, heartbeat lease, actual watchdog thread, closed controller,
+validation, x86/x64 INPUT ABI assumptions, scan-code flags, mocked SendInput
+success/failure, authenticated aiohttp endpoint and remote rejection.
+
+NOT RUN: actual Windows SendInput delivery to Adobe_10.exe, complete real-map
+simulation, live-game server play. Backend must run locally beside Flash on
+Windows; Linux/VPS-only deployment cannot deliver real keys to the user's PC.

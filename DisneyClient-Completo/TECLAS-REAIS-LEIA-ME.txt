@@ -1,0 +1,33 @@
+ROBO REFEITO — TECLAS REAIS E CHECKS
+
+Esta versao envia setas pelo SendInput do Windows, nao por eventos falsos do SWF.
+
+Como usar:
+1. Extraia o pacote completo no PC Windows onde roda o Adobe_10.exe.
+2. Inicie INICIAR_CLIENT.bat com a configuracao local de banco/parser ja usada
+   pelo projeto. O iniciador agora abre http://127.0.0.1:8080 por padrao.
+3. Abra o client local no Adobe_10.exe e mantenha a janela do jogo em foco.
+4. Ative o robo. O backend confirma as setas; os tempos comecam apos a confirmacao.
+
+Nao basta trocar somente o SWF de um servidor remoto. O backend que envia as
+teclas precisa rodar no MESMO Windows do Flash, com a sessao local autenticada.
+Linux, VPS remota e navegador sem Adobe_10.exe nao sao destinos desta ponte.
+Se a ponte nao estiver disponivel, o robo mostra a falha; nao simula teclas falsas.
+
+O arquivo rotas_teclado_convertidas.json contem os planos LEFT/RIGHT/UP gerados
+para as 2.205 rotas anexadas. DOWN aparece apenas para agachamentos antigos.
+Os arquivos de mapas originais foram preservados. No jogo, o plano e recalculado
+a partir da posicao inicial real; o JSON usa a primeira amostra como inicio de
+referencia e serve para revisar os tempos/direcoes convertidos.
+
+O robo confere X e Y em tempo real. Um tempo vencido nao conta como chegada.
+Se um ponto ficar impossivel, a tentativa tem limite e e marcada NAO_CONFIRMADO;
+nao inventa chegada nem volta automaticamente para buscar o ponto perdido.
+
+Teclas sao liberadas ao desligar/desconectar. A ponte tambem solta as teclas se
+ficar 500 ms sem atualizacao ou detectar que outra janela recebeu o foco.
+
+Validacao: 32 verificacoes do SWF, 26 testes Python e conversao da base completa.
+A comunicacao HTTP e o adaptador Win32 foram testados com destinos simulados.
+SendInput em um Windows real e a fisica do servidor do jogo ainda precisam de
+validacao no PC do usuario. Isso nao garante erro zero em todos os mapas.
