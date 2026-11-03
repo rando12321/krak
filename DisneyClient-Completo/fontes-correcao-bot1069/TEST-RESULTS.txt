@@ -1,27 +1,27 @@
 Executed 2026-11-03: Java 21, FFDec 26.4.0, Ruffle 0.7.1, Playwright + Chromium.
-PASS: 120 AVM2 native-keyboard/victory/clock/log assertions; 32 routes decoded; victory independent of route
-PASS: 788 pre-existing method bodies outside RoutePlayerFixed1069 unchanged; 48 helper bodies verified
+PASS: 163 AVM2 native-keyboard/victory/clock/log assertions; 32 routes decoded; victory independent of route
+PASS: 788 pre-existing method bodies outside RoutePlayerFixed1069 unchanged; 49 helper bodies verified
 PASS: full rebuild_precision.sh compilation, verification and runtime test workflow
 
-Current behavior: route deviations and large clock stalls continue instead of
-pausing. Unconfirmed overshoots follow the recorded command without invented
-reverse steering. Bounded recovery eventually continues even when blocked.
-Small frame lateness preserves recorded phase; large stalls rebase the next
-interval, executing at most one command per frame without a backlog burst.
-The earlier assertions requiring automatic pauses or accumulation of all frame
-lateness were updated to the user's requested continuation/timing behavior.
+Workflow changed at user request: recorded time and input drive playback;
+position observations are diagnostic and never gate a command. The earlier
+spatial-gate assertions were replaced with clock/velocity/input regressions.
+Native victory, manual intervention, focus, disconnect, clock and logging
+regressions remain exercised.
 
-Regressions cover 33ms frames with 100ms commands completing at recorded total
-time, overshoot and mirrored continuation, no unrecorded reverse, blocked
-continuation, pre-deadline crossing retention without early input, confirmation
-isolated per command, recorded jump hold and release, no invented/repeated jump,
-native victory, manual focus/input interruption, disconnect release and logging.
-No live-server gameplay or Windows validation. Test physics is simulated.
+Coverage includes signed16 hundredths conversion to px/s, unsigned negative vy,
+mirrored vx, native vector and getter reads, observed-displacement fallback,
+stale/nonfinite measurements, ground overspeed trimming without reversal,
+hysteresis and minimum switching interval, interpolation of matching-input
+samples, launch/flight protection using vy and jump, optional position loss,
+scheduled jump and release regardless of coordinates, recorded completion time,
+33ms frame quantization and the 63-command legacy trajectory fixture.
 
-Jump fix: recorded jump state is dispatched at the command deadline before
-spatial synchronization. Pending airborne or same-height waypoints cannot block
-takeoff. The key remains held across correction frames and application does not
-suppress it. Recorded release happens even if its waypoint is still pending,
-allowing subsequent takeoffs. No duplicate jump KEY_DOWN is sent on arrival.
-Seven additional assertions exercise pre-deadline, pending target, held input,
-arrival, recorded release and correction after release.
+A 50-tick fake engine integrates acceleration and drag from held keys only.
+Reference speed is 60px/s; feedback keeps mean speed in the asserted 35–110px/s
+range and peak below 120px/s instead of reaching the model's 180px/s open-loop
+cap. Every tick also checks that feedback never emits reverse input. This is a
+model-specific assertion, not a measurement of real-game precision.
+
+No native movement functions, animation calls, position setters or velocity
+writes are used by the controller. No live-server gameplay or Windows test.

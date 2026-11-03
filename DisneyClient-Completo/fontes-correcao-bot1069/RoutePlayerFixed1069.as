@@ -54,15 +54,12 @@ package disney {
         private var lastPosition:Object;
         private var lastPositionAt:int=-1;
         private var measuredVx:Number=0;
-        private var predictionMs:Number=0;
+        private var measuredVy:Number=0;
+        private var velocitySampleValid:Boolean=false;
         private var previousWalk:Object;
-        private var scheduledJumpIndex:int=-1;
-        private var reachedIndex:int=-1;
-        private var reachedAt:int=-1;
-        private var syncStarted:int=-1;
-        private var syncProgressAt:int=0;
-        private var syncBest:Number=Number.POSITIVE_INFINITY;
-        private var syncLogAt:int=-1000;
+        private var lastMotionLogAt:int=-1000;
+        private var lastFeedbackAt:int=0;
+        private var velocityCoasting:Boolean=false;
         private var heldKeys:Object={};
         private var emittingKey:Boolean=false;
         private var manualKeyHandler:Function;
@@ -199,7 +196,7 @@ package disney {
                 if(px!=null && py!=null && isFinite(Number(px)) && isFinite(Number(py)))return {x:Number(px)*30,y:Number(py)*30};
             }
             var x:Object=safeRead(player,"x");var y:Object=safeRead(player,"y");
-            if(x==null || y==null || !isFinite(Number(x)) || !isFinite(Number(y)))throw new Error("posicao observada indisponivel",2010);
+            if(x==null || y==null || !isFinite(Number(x)) || !isFinite(Number(y)))return {x:Number.NaN,y:Number.NaN};
             return {x:Number(x),y:Number(y)};
         }
         private function waypoint(point:Object):Object {
@@ -207,78 +204,65 @@ package disney {
             if(mirror)x=width-x;
             return {x:x,y:int(Number(point.y))/100*30};
         }
-        private function tolerance(point:Object):Object {
-            var transition:Boolean=!previousWalk || Boolean(previousWalk.ml)!=Boolean(point.ml) || Boolean(previousWalk.mr)!=Boolean(point.mr) || Boolean(previousWalk.jump)!=Boolean(point.jump);
-            // Small windows at actual input transitions; periodic same-state
-            // samples allow only modest measurement noise, never a 12px shortcut.
-            return transition ? {x:2.5,y:4} : {x:5,y:7};
+        // Legacy packets store signed hundredths of Box2D units/second.
+        // Compare in pixels/second: one Box2D unit is 30 pixels.
+        public static function recordedVelocity(value:Number):Number {
+            return (int(value)<<16>>16)/100*30;
         }
-        private function crossed(a:Object,b:Object,target:Object,margin:Object):Boolean {
-            if(!a)return false;
-            // Closest point in normalized elliptical coordinates. A large
-            // horizontal frame displacement must not relax vertical accuracy.
-            var dx:Number=(b.x-a.x)/margin.x;var dy:Number=(b.y-a.y)/margin.y;
-            var length:Number=dx*dx+dy*dy;
-            if(length<0.0001)return false;
-            var ax:Number=(a.x-target.x)/margin.x;var ay:Number=(a.y-target.y)/margin.y;
-            var t:Number=-(ax*dx+ay*dy)/length;
-            if(t<0 || t>1)return false;
-            var ex:Number=ax+t*dx;var ey:Number=ay+t*dy;
-            return ex*ex+ey*ey<=1;
+        private function observedVelocity():Object {
+            var state:Object=safeRead(body,safeRead(keys,"physics_state"));
+            var getter:Function=safeRead(body,safeRead(keys,"get_linear_velocity")) as Function;
+            if(getter!=null){try{state=getter.apply(body,[]);}catch(ignoredVelocity:Error){}}
+            var vx:Object=safeRead(state,safeRead(keys,"physics_state_vx"));
+            var vy:Object=safeRead(state,safeRead(keys,"physics_state_vy"));
+            if(vx!=null && vy!=null && isFinite(Number(vx)) && isFinite(Number(vy)))return {vx:Number(vx)*30,vy:Number(vy)*30,valid:true,source:"fisica"};
+            return {vx:measuredVx,vy:measuredVy,valid:velocitySampleValid,source:"deslocamento"};
         }
-        private function synchronize(step:Array,current:Object,previous:Object,now:int):Boolean {
-            if(String(step[1])!="walk")return true;
-            var target:Object=waypoint(step[0]);var margin:Object=tolerance(step[0]);
-            var dx:Number=target.x-current.x;var dy:Number=target.y-current.y;
-            // Arrival is observed every frame, including before the timer expires.
-            // A recent crossing belongs only to this command, never to the next.
-            if(reachedIndex==index && now-reachedAt<=120){
-                if(syncStarted>=0){
-                    diagnosticFrame=true;diagnostic("sincronizar","ALINHADO","passo="+index+" atual="+current.x.toFixed(1)+","+current.y.toFixed(1));
-                    // Time spent recovering must never become playback backlog.
-                    due=now;
+        private function referenceVelocity(now:int):Object {
+            var vx:Number=recordedVelocity(Number(previousWalk.vx));
+            var vy:Number=recordedVelocity(Number(previousWalk.vy));
+            // Only interpolate periodic samples of the same input state.
+            // Never anticipate a recorded turn, jump or release.
+            if(index<sequence.length && String(sequence[index][1])=="walk" && due>lastAppliedAt){
+                var next:Object=sequence[index][0];
+                if(Boolean(next.ml)==Boolean(previousWalk.ml) && Boolean(next.mr)==Boolean(previousWalk.mr) && Boolean(next.jump)==Boolean(previousWalk.jump)){
+                    var fraction:Number=Math.max(0,Math.min(1,(now-lastAppliedAt)/(due-lastAppliedAt)));
+                    vx+=(recordedVelocity(Number(next.vx))-vx)*fraction;
+                    vy+=(recordedVelocity(Number(next.vy))-vy)*fraction;
                 }
-                syncStarted=-1;syncBest=Number.POSITIVE_INFINITY;return true;
             }
-            var approach:int=0;
-            if(previousWalk){
-                approach=int(Boolean(previousWalk.mr))-int(Boolean(previousWalk.ml));
-                if(mirror)approach=-approach;
+            return {vx:mirror ? -vx : vx,vy:vy};
+        }
+        private function synchronizeMotion(current:Object,now:int):void {
+            if(!previousWalk)return;
+            var actual:Object=observedVelocity();var reference:Object=referenceVelocity(now);
+            var left:Boolean=Boolean(previousWalk.ml);var right:Boolean=Boolean(previousWalk.mr);
+            if(mirror){var swap:Boolean=left;left=right;right=swap;}
+            var direction:int=int(right)-int(left);
+            // Keyboard feedback trims excess ground speed with release/repress,
+            // never by applying an unrecorded opposite direction or editing physics.
+            var canTrim:Boolean=Boolean(actual.valid) && direction!=0 && !Boolean(previousWalk.jump) && !Boolean(heldKeys[38]) && Math.abs(Number(actual.vy))<24 && Math.abs(Number(reference.vy))<24 && Number(reference.vx)*direction>6;
+            if(canTrim){
+                var expected:Number=Number(reference.vx)*direction;
+                var observed:Number=Number(actual.vx)*direction;
+                var band:Number=Math.max(9,expected*0.12);
+                if(!velocityCoasting && observed>expected+band)velocityCoasting=true;
+                else if(velocityCoasting && observed<expected+band/2)velocityCoasting=false;
+            }else velocityCoasting=false;
+            if(now-lastFeedbackAt>=40){
+                var wantLeft:Boolean=left && !velocityCoasting;
+                var wantRight:Boolean=right && !velocityCoasting;
+                if(Boolean(heldKeys[37])!=wantLeft || Boolean(heldKeys[39])!=wantRight){
+                    if(!wantLeft)setKey(37,false);if(!wantRight)setKey(39,false);
+                    if(wantLeft)setKey(37,true);if(wantRight)setKey(39,true);
+                    lastFeedbackAt=now;
+                }
             }
-            // An unconfirmed overshoot must not manufacture a return movement.
-            // Only a recorded direction change may reverse the held direction.
-            if(approach!=0 && dx*approach < -margin.x){
-                syncStarted=-1;syncBest=Number.POSITIVE_INFINITY;
-                diagnosticFrame=true;diagnostic("sincronizar","CONTINUAR","passo="+index+" ponto ultrapassado; seguir comando gravado sem retorno corretivo");
-                return true;
+            if(now-lastMotionLogAt>=500){
+                lastMotionLogAt=now;diagnosticFrame=true;
+                var target:Object=waypoint(previousWalk);
+                diagnostic("movimento","MEDIDO","vx="+Number(actual.vx).toFixed(1)+" vy="+Number(actual.vy).toFixed(1)+"px/s gravado="+Number(reference.vx).toFixed(1)+","+Number(reference.vy).toFixed(1)+"px/s fonte="+actual.source+" valido="+actual.valid+" modulacao="+velocityCoasting+" erroXY="+(target.x-current.x).toFixed(1)+","+(target.y-current.y).toFixed(1)+"px; posicao apenas diagnostico");
             }
-            var distance:Number=Math.sqrt(dx*dx+dy*dy);
-            if(syncStarted<0){syncStarted=now;syncProgressAt=now;syncBest=distance;syncLogAt=-1000;}
-            if(distance<syncBest-2){syncBest=distance;syncProgressAt=now;}
-            if(now-syncProgressAt>1500 || now-syncStarted>5000){
-                syncStarted=-1;syncBest=Number.POSITIVE_INFINITY;
-                diagnosticFrame=true;diagnostic("sincronizar","CONTINUAR","passo="+index+" erro="+distance.toFixed(1)+"px; limite de recuperacao atingido; seguir sem pausa");
-                return true;
-            }
-            // Read position only. Corrections still use the native keyboard path.
-            var steering:Number=dx;
-            if(dx*measuredVx>0 && Math.abs(dx)>margin.x){
-                steering=dx-measuredVx*predictionMs/1000;
-                // Coast if the next observed frame should cross the target.
-                // Do not reverse based on prediction; overshoots follow the recorded command.
-                if(steering*dx<0)steering=0;
-            }
-            var deadZone:Number=Math.min(2,margin.x/2);
-            if(Math.abs(dx)<=margin.x)steering=0;
-            // A due takeoff stays held while its airborne waypoint is pending.
-            // Never consume it as a speculative recovery pulse.
-            var keepRecordedJump:Boolean=scheduledJumpIndex==index ? Boolean(step[0].jump) : Boolean(previousWalk && Boolean(previousWalk.jump) && Boolean(heldKeys[38]));
-            movement(steering < -deadZone,steering > deadZone,keepRecordedJump);
-            if(now-syncLogAt>=500){
-                syncLogAt=now;diagnosticFrame=true;
-                diagnostic("sincronizar","AGUARDANDO","passo="+index+" atual="+current.x.toFixed(1)+","+current.y.toFixed(1)+" alvo="+target.x.toFixed(1)+","+target.y.toFixed(1)+" erro="+distance.toFixed(1)+"px tolerancia="+margin.x+","+margin.y+"px vxObservado="+measuredVx.toFixed(1)+"px/s previsao="+predictionMs+"ms");
-            }
-            status("Bot: sincronizando passo "+index+" | distancia="+distance.toFixed(1)+"px | sem pular pontos",now);return false;
         }
         private function restoreFocus(focus:flash.display.InteractiveObject):void {
             try{root.stage.focus=focus;}catch(ignoredFocus:Error){}
@@ -585,44 +569,29 @@ package disney {
                 sequence=decodeRoute(String(saved));
                 diagnostic("decodeRoute","DEPOIS","passos="+sequence.length);
                 prepareKeyboard();
-                // Each recorded delta is milliseconds BEFORE that command.
-                // For keyboard holds, never recover earlier frame lateness by
-                // shortening the next interval. Anchor it to actual dispatch.
-                index=0;completed=false;routeStartedAt=now;lastAppliedAt=now;lastPosition=null;lastPositionAt=-1;measuredVx=0;predictionMs=0;previousWalk=null;scheduledJumpIndex=-1;reachedIndex=-1;reachedAt=-1;syncStarted=-1;syncBest=Number.POSITIVE_INFINITY;expectedElapsed=Number(sequence[0][2]);
+                // Deltas are before each command. The clock drives input;
+                // position observations never postpone or consume commands.
+                index=0;completed=false;routeStartedAt=now;lastAppliedAt=now;lastPosition=null;lastPositionAt=-1;measuredVx=0;measuredVy=0;velocitySampleValid=false;previousWalk=null;lastMotionLogAt=-1000;lastFeedbackAt=now;velocityCoasting=false;expectedElapsed=Number(sequence[0][2]);
                 due=now+expectedElapsed;running=true;
                 diagnostic("iniciarRota","DEPOIS","passos="+sequence.length+" espera gravada="+expectedElapsed+"ms | sem antecipacao");
             }
             if (!running) {status(completed ? "Bot: comandos da rota finalizados | "+code+" | aguardando proxima rodada" : "Bot: aguardando inicio da rota | "+code,now);return;}
             var currentPosition:Object=observedPosition();var previousPosition:Object=lastPosition;
             var sampleMs:int=lastPositionAt>=0 ? now-lastPositionAt : 0;
-            measuredVx=previousPosition && sampleMs>0 && sampleMs<=250 ? (currentPosition.x-previousPosition.x)*1000/sampleMs : 0;
-            predictionMs=sampleMs>0 && sampleMs<=250 ? Math.min(50,sampleMs) : 0;
+            var validPositions:Boolean=previousPosition!=null && isFinite(Number(previousPosition.x)) && isFinite(Number(previousPosition.y)) && isFinite(Number(currentPosition.x)) && isFinite(Number(currentPosition.y));
+            measuredVx=validPositions && sampleMs>0 && sampleMs<=250 ? (currentPosition.x-previousPosition.x)*1000/sampleMs : 0;
+            measuredVy=validPositions && sampleMs>0 && sampleMs<=250 ? (currentPosition.y-previousPosition.y)*1000/sampleMs : 0;
+            velocitySampleValid=validPositions && sampleMs>0 && sampleMs<=250;
             lastPosition=currentPosition;lastPositionAt=now;
-            if(String(sequence[index][1])=="walk"){
-                var pending:Object=waypoint(sequence[index][0]);var arrivalMargin:Object=tolerance(sequence[index][0]);
-                var atTarget:Boolean=Math.abs(pending.x-currentPosition.x)<=arrivalMargin.x && Math.abs(pending.y-currentPosition.y)<=arrivalMargin.y;
-                // Long gaps and observations predating the last command cannot
-                // prove that this command's waypoint was traversed correctly.
-                var freshCrossing:Boolean=sampleMs>0 && sampleMs<=250 && now-sampleMs>=lastAppliedAt && crossed(previousPosition,currentPosition,pending,arrivalMargin);
-                if(atTarget || freshCrossing){reachedIndex=index;reachedAt=now;}
-            }
             // Exactly one command per ENTER_FRAME, including zero-delta samples.
-            // Next hold starts after actual dispatch, never from an overdue clock.
+            // Normal frame jitter preserves phase; large stalls rebase safely.
             if (running && now>=due) {
-                if(syncStarted<0 && now-due>750){
+                if(now-due>750){
                     diagnosticFrame=true;diagnostic("relogio","CONTINUAR","atraso="+Math.round(now-due)+"ms; executar um comando e preservar o proximo intervalo");
                 }
-                var dueStep:Array=sequence[index];
-                if(String(dueStep[1])=="walk" && scheduledJumpIndex!=index){
-                    // Recorded points may already be above the launch surface.
-                    // Trigger at the deadline, before waiting for that height.
-                    setKey(38,Boolean(dueStep[0].jump));scheduledJumpIndex=index;
-                    diagnosticFrame=true;diagnostic("salto",Boolean(dueStep[0].jump) ? "PRESSIONADO" : "SOLTO","passo="+index+" no prazo gravado, antes de sincronizar altura");
-                }
-                if(!synchronize(sequence[index],currentPosition,previousPosition,now))return;
                 diagnosticFrame=true;
                 diagnostic("apply","ANTES","passo="+index+" acao="+sequence[index][1]+" atraso="+Math.max(0,now-due)+"ms intervalo="+Number(sequence[index][2])+"ms mantido="+(now-lastAppliedAt)+"ms gravadoTotal="+expectedElapsed+"ms decorrido="+(now-routeStartedAt)+"ms atual="+currentPosition.x.toFixed(1)+","+currentPosition.y.toFixed(1));
-                apply(sequence[index]);lastAppliedAt=now;index++;reachedIndex=-1;reachedAt=-1;
+                apply(sequence[index]);lastAppliedAt=now;lastFeedbackAt=now;velocityCoasting=false;index++;
                 diagnostic("apply","DEPOIS","passos="+index+"/"+sequence.length);
                 if (index>=sequence.length) {
                     completed=true;running=false;release();diagnostic("concluirRota","DEPOIS","todos os passos executados");
@@ -637,6 +606,7 @@ package disney {
                     diagnostic("relogio.teclado","AGENDADO","intervalo="+nextInterval+"ms atrasoQuadro="+frameLateness+"ms fasePreservada="+retainPhase+" proximo="+due+"ms");
                 }
             }
+            if(running)synchronizeMotion(currentPosition,now);
             status(running ? "Bot: reproduzindo "+code+" | "+index+"/"+sequence.length : "Bot: comandos da rota finalizados | "+code,now);
         }
         private function apply(step:Array):void {

@@ -1,64 +1,79 @@
-Precisão, sequência e relógio do teclado — 2026-11-03
+Reprodução por relógio, teclas e velocidade — 2026-11-03
 
-Atualização aplicada aos fontes e ao ChargeurTransformice.swf.
+Aplicado aos fontes e ao ChargeurTransformice.swf deste pacote.
 
-Comportamento:
-- Pequenas variações entre quadros preservam os prazos gravados, evitando
-  acumular o arredondamento de cada quadro em todos os próximos comandos.
-- A correção de fase vale para atraso de até 50 ms e até metade do próximo
-  intervalo. Atrasos maiores reiniciam a referência do próximo intervalo;
-  não há execução de vários comandos no mesmo quadro para compensar.
-- Não há pausa automática por atraso do relógio, ponto ultrapassado ou limite
-  de recuperação. O bot continua os comandos na ordem gravada.
-- Ao ultrapassar um ponto, segue o comando gravado; não inventa movimento
-  de retorno para buscar o ponto. Viradas gravadas continuam funcionando.
-- A recuperação tenta alcançar pontos ainda à frente. Após 1500 ms sem
-  progresso ou 5000 ms de recuperação, segue o comando sem pedir reativação.
-- Observa o ponto pendente em todos os quadros, inclusive antes do prazo.
-  Cruzamentos confirmados ficam válidos por até 120 ms apenas para esse passo.
-- Intervalos de observação maiores que 250 ms não comprovam cruzamento.
-- Pressiona e solta o salto no prazo do comando, antes de sincronizar posição
-  ou altura. Um ponto já no ar não bloqueia a decolagem necessária para chegar.
-- Mantém a tecla até a soltura gravada; sincronização não cancela o salto no
-  quadro seguinte nem suprime o salto ao aplicar o ponto depois.
-- Soltar no prazo permite rearmar a tecla para a próxima decolagem.
-- Tolerâncias: mudanças de direção/salto usam 2,5 px em X e 4 px em Y;
-  amostras que mantêm os comandos usam 5 px em X e 7 px em Y.
-- Cruzamento usa uma elipse normalizada para preservar a precisão vertical.
-- Velocidade observada e previsão de até 50 ms reduzem ultrapassagens.
-- Altura do alvo sozinha não inventa salto. Apenas o estado gravado comanda
-  a tecla; amostras consecutivas no ar não repetem KEY_DOWN.
-- Diagnóstico distingue chegada confirmada de continuação sem confirmação.
+A ordem e os prazos gravados comandam as teclas. A posição é apenas uma checagem
+no diagnóstico: não existe espera para alcançar coordenadas, retorno corretivo,
+pausa por desvio ou salto de comandos para compensar posição.
 
-Quando o ponto não é alcançável, continuar prioriza a sequência gravada;
-continuar não comprova que o jogador passou pela coordenada exata.
-Controle manual, campo de texto e perda de foco ainda interrompem a entrada
-sintética. Desconexão, morte e vitória continuam tratados pelo fluxo nativo.
+vx/vy e unidades:
+O RoutePlayer.as legado incluído no projeto usa:
+  vx = (int(point.vx) << 16 >> 16) / 100
+  vy = (int(point.vy) << 16 >> 16) / 100
+São inteiros de 16 bits com sinal em centésimos de unidade física por segundo.
+O controle novo converte as duas componentes para pixels/segundo multiplicando
+por 30. Ex.: 345 equivale a 103,5 px/s; 65036 equivale a -150 px/s, não a uma
+velocidade positiva enorme. Espelhamento inverte vx, sem inverter vy.
 
-Validação:
-- 120 verificações AVM2 executadas no SWF com Ruffle e Chromium.
-- 32 rotas decodificadas; cenário legado de 63 comandos preservado.
+Leitura e controle:
+- Lê a velocidade real pelo getter nativo ou pelo vetor físico existente.
+- Se não houver leitura nativa válida, usa deslocamento observado por tempo,
+  nas mesmas unidades. Amostras com intervalo acima de 250 ms são descartadas.
+- Interpola vx/vy entre amostras que mantêm exatamente os mesmos comandos.
+  Não antecipa viradas, saltos ou solturas.
+- No chão, se a velocidade exceder a referência, solta temporariamente a direção
+  gravada e reaperta quando ela volta à faixa. Nunca usa direção contrária para
+  frear nem escreve velocidade, posição ou animação diretamente.
+- A faixa tem histerese e mínimo de 40 ms entre ajustes para evitar tremulação.
+- Usa vy real e gravado para distinguir movimento vertical: não aplica a
+  limitação de velocidade de chão durante voo ou com a tecla de salto mantida.
+- Se a referência começa em zero ou indica outra direção, mantém a entrada
+  gravada; não bloqueia a aceleração inicial nem inventa comando oposto.
+- Salto e soltura ocorrem no prazo, sem depender de altura ou chegada ao ponto.
+- Sem dados válidos de velocidade, segue as teclas gravadas, sem bloquear.
+- A ausência de coordenadas opcionais também não bloqueia os comandos.
+
+Relógio:
+Pequenos atrasos de quadro preservam a fase gravada, sem somar arredondamento
+em cada passo. Atrasos maiores reiniciam o próximo intervalo, sem executar vários
+comandos no mesmo quadro. O controle de velocidade não altera os prazos da rota.
+Controle manual, chat, perda de foco, desconexão, morte e vitória mantêm os fluxos
+existentes de interrupção/liberação de teclas.
+
+Limite físico:
+O robô legado atribuía vx/vy diretamente ao corpo e ajustava coordenadas. Aqui,
+as teclas solicitam movimento ao motor do jogo; aceleração, atrito e colisões
+continuam sob controle dele. A modulação reduz excesso de velocidade no chão,
+mas não pode impor uma velocidade exata nem corrigir fisicamente uma colisão.
+Os testes locais não garantem erro zero no servidor ou na física real.
+
+Validação atual:
+- 163 verificações AVM2 executadas no SWF com Ruffle e Chromium.
+- 32 rotas decodificadas e cenário legado de 63 comandos.
+- Modelo de aceleração/atrito confirma redução do excesso de velocidade com
+  entrada de teclado, sem escrita física nem retorno de direção.
+- Conversão assinada, espelhamento, leitura nativa e fallback, voo, salto,
+  soltura, ordem, tempo, foco e fluxo de vitória/desconexão exercitados.
 - 788 corpos de métodos anteriores ao helper preservados byte a byte.
-- Limites de pilha/escopo de 48 corpos do helper verificados.
-- Teste de quadros de 33 ms e comandos de 100 ms conclui no prazo gravado,
-  sem somar o atraso de arredondamento em cada comando.
+- Limites de pilha/escopo de 49 corpos do helper verificados.
 - ZIP e manifesto SHA-256 verificados.
+Não houve teste em Windows nem conexão ao servidor do jogo.
 
-Testes usam objetos e física simulados. Não houve teste em Windows nem conexão
- ao servidor do jogo. Não há garantia de erro zero na física real.
+Referência:
+O link externo fornecido para juninhpsx/krakitos retornou 404 nesta sessão.
+A conversão acima foi lida no fonte legado fontes-autoplay/RoutePlayer.as já
+incluído neste projeto; não é apresentada como leitura daquele ZIP indisponível.
 
-Para recompilar e testar:
-Requisitos: Java 21, FFDec 26.4.0, Node.js, Playwright, Chromium,
-@ruffle-rs/ruffle 0.7.1. Preserve a verificação TLS ao obter ferramentas.
+Recompilar e testar:
+Java 21, FFDec 26.4.0, Node.js, Playwright, Chromium e @ruffle-rs/ruffle 0.7.1.
 A entrada deve conter disney.RoutePlayerFixed1069, como neste pacote.
-PatchBot1069.java e VerifyBot1069.java são ferramentas históricas para o SWF
-anterior à instalação do bot; não reaplicar ao SWF já corrigido.
 
 FFDEC_HOME=/caminho/ffdec \
 RUFFLE_PACKAGE=/caminho/node_modules/@ruffle-rs/ruffle \
 NODE_PATH=/caminho/node_modules \
 bash fontes-correcao-bot1069/rebuild_precision.sh entrada.swf saida.swf
 
-CHROMIUM_PATH seleciona outro executável de Chromium, se necessário.
-A saída só é copiada após compilação e testes passarem.
-O SWF de testes não é incluído no cliente final.
+CHROMIUM_PATH seleciona outro Chromium, se necessário.
+O script só copia a saída após compilação e testes passarem.
+PatchBot1069.java e VerifyBot1069.java são ferramentas históricas para o SWF
+anterior à instalação do bot; não reaplicar ao SWF já corrigido.
