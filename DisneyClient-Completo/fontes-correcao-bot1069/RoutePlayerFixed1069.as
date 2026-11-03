@@ -56,7 +56,7 @@ package disney {
         private var measuredVx:Number=0;
         private var predictionMs:Number=0;
         private var previousWalk:Object;
-        private var recoveryJumpIndex:int=-1;
+        private var scheduledJumpIndex:int=-1;
         private var reachedIndex:int=-1;
         private var reachedAt:int=-1;
         private var syncStarted:int=-1;
@@ -261,7 +261,6 @@ package disney {
                 return true;
             }
             // Read position only. Corrections still use the native keyboard path.
-            var airborne:Boolean=Boolean(safeRead(player,safeRead(keys,"is_jumping")));
             var steering:Number=dx;
             if(dx*measuredVx>0 && Math.abs(dx)>margin.x){
                 steering=dx-measuredVx*predictionMs/1000;
@@ -271,11 +270,10 @@ package disney {
             }
             var deadZone:Number=Math.min(2,margin.x/2);
             if(Math.abs(dx)<=margin.x)steering=0;
-            var recordedTakeoff:Boolean=Boolean(step[0].jump) && (!previousWalk || !Boolean(previousWalk.jump));
-            var correctiveJump:Boolean=recordedTakeoff && dy < -margin.y && !airborne && recoveryJumpIndex!=index;
-            if(correctiveJump)recoveryJumpIndex=index;
-            var keepRecordedJump:Boolean=previousWalk && Boolean(previousWalk.jump) && Boolean(heldKeys[38]);
-            movement(steering < -deadZone,steering > deadZone,correctiveJump || keepRecordedJump);
+            // A due takeoff stays held while its airborne waypoint is pending.
+            // Never consume it as a speculative recovery pulse.
+            var keepRecordedJump:Boolean=scheduledJumpIndex==index ? Boolean(step[0].jump) : Boolean(previousWalk && Boolean(previousWalk.jump) && Boolean(heldKeys[38]));
+            movement(steering < -deadZone,steering > deadZone,keepRecordedJump);
             if(now-syncLogAt>=500){
                 syncLogAt=now;diagnosticFrame=true;
                 diagnostic("sincronizar","AGUARDANDO","passo="+index+" atual="+current.x.toFixed(1)+","+current.y.toFixed(1)+" alvo="+target.x.toFixed(1)+","+target.y.toFixed(1)+" erro="+distance.toFixed(1)+"px tolerancia="+margin.x+","+margin.y+"px vxObservado="+measuredVx.toFixed(1)+"px/s previsao="+predictionMs+"ms");
@@ -590,7 +588,7 @@ package disney {
                 // Each recorded delta is milliseconds BEFORE that command.
                 // For keyboard holds, never recover earlier frame lateness by
                 // shortening the next interval. Anchor it to actual dispatch.
-                index=0;completed=false;routeStartedAt=now;lastAppliedAt=now;lastPosition=null;lastPositionAt=-1;measuredVx=0;predictionMs=0;previousWalk=null;recoveryJumpIndex=-1;reachedIndex=-1;reachedAt=-1;syncStarted=-1;syncBest=Number.POSITIVE_INFINITY;expectedElapsed=Number(sequence[0][2]);
+                index=0;completed=false;routeStartedAt=now;lastAppliedAt=now;lastPosition=null;lastPositionAt=-1;measuredVx=0;predictionMs=0;previousWalk=null;scheduledJumpIndex=-1;reachedIndex=-1;reachedAt=-1;syncStarted=-1;syncBest=Number.POSITIVE_INFINITY;expectedElapsed=Number(sequence[0][2]);
                 due=now+expectedElapsed;running=true;
                 diagnostic("iniciarRota","DEPOIS","passos="+sequence.length+" espera gravada="+expectedElapsed+"ms | sem antecipacao");
             }
@@ -613,6 +611,13 @@ package disney {
             if (running && now>=due) {
                 if(syncStarted<0 && now-due>750){
                     diagnosticFrame=true;diagnostic("relogio","CONTINUAR","atraso="+Math.round(now-due)+"ms; executar um comando e preservar o proximo intervalo");
+                }
+                var dueStep:Array=sequence[index];
+                if(String(dueStep[1])=="walk" && scheduledJumpIndex!=index){
+                    // Recorded points may already be above the launch surface.
+                    // Trigger at the deadline, before waiting for that height.
+                    setKey(38,Boolean(dueStep[0].jump));scheduledJumpIndex=index;
+                    diagnosticFrame=true;diagnostic("salto",Boolean(dueStep[0].jump) ? "PRESSIONADO" : "SOLTO","passo="+index+" no prazo gravado, antes de sincronizar altura");
                 }
                 if(!synchronize(sequence[index],currentPosition,previousPosition,now))return;
                 diagnosticFrame=true;
@@ -639,7 +644,7 @@ package disney {
             if(action=="walk"){
                 var point:Object=step[0];var left:Boolean=Boolean(point.ml);var right:Boolean=Boolean(point.mr);
                 if(mirror){left=Boolean(point.mr);right=Boolean(point.ml);}
-                movement(left,right,Boolean(point.jump) && recoveryJumpIndex!=index);previousWalk=point;
+                movement(left,right,Boolean(point.jump));previousWalk=point;
             }else if(action=="crouch" || action=="duck")setKey(40,Number(step[0])!=0);
             // Cheese/hole markers consume time only. Real movement and native
             // game processing handle collection and server-confirmed arrival.
