@@ -1,0 +1,89 @@
+--- a/fontes-autoplay/RoutePlayer.as
++++ b/fontes-autoplay/RoutePlayer.as
+@@ -6,7 +6,7 @@
+   private var focused:Boolean=true;private var suspendedAt:int=-1;private var roundToken:String="";private var restartPending:Boolean=false;private var waitingSpawn:Boolean=false;private var restUntil:int=0;private var restAt:int=0;private var lastState:Object;private var timing:RouteTiming;private var synchronized:Boolean=false;
+   private var remote:Boolean=true;private var loadingCode:String="";private var failedCode:String="";private var cacheOrder:Array=[];private var root:MovieClip;private var motion:NativeMotion;private var routes:Object;private var loadError:String="";private var loader:URLLoader;
+   private var map:Object;private var player:Object;private var body:Object;private var code:String="";private var aliveBefore:Boolean=false;
+-  private var sequence:Array;private var index:int=0;private var due:Number=0;private var settle:int=0;private var enabled:Boolean=false;private var attempted:Boolean=false;private var running:Boolean=false;private var paused:Boolean=false;
++  private var sequence:Array;private var index:int=0;private var due:Number=0;private var lastWalkAt:Number=-1;private var settle:int=0;private var enabled:Boolean=false;private var attempted:Boolean=false;private var running:Boolean=false;private var paused:Boolean=false;
+   private var mirror:Boolean=false;private var width:Number=800;private var pauseMessage:String="Robot: pausado; reative para reiniciar";private var hasSample:Boolean=false;private var won:Boolean=false;private var entering:Boolean=false;private var holeWaitUntil:int=0;private var retryAt:int=0;private var failure:String="";public var message:String="Robot: aguardando jogo";
+   public function RoutePlayer(value:MovieClip,external:Boolean=false){managed=external;root=value;timing=new RouteTiming(uint(getTimer())^uint(Math.random()*2147483647));motion=NativeMotion.get(value);if(!managed)motion.observeWith(packet);routes={};}
+   public function setManagedActive(value:Boolean):void{if(!managed)return;managedOn=value;if(!value){cancelLoad();reset(getTimer());enabled=false;}}
+@@ -45,7 +45,7 @@
+   private function status(text:String):void{message=text;var ui:Object=root["Interface"];if(ui && ui["status_field"])ui["status_field"].text=text;}
+   private function release():void{motion.release(this);}
+   public function pause():void{if(!enabled)return;release();running=false;paused=true;pauseMessage="Robot: pausado pela tecla; reative para reiniciar";status(pauseMessage);}
+-  private function reset(now:int):void{cheeseConfirmed=false;cheeseWaitUntil=-1;release();running=false;attempted=false;paused=false;failure="";won=false;entering=false;holeWaitUntil=0;sequence=null;index=0;hasSample=false;synchronized=false;timing.reset(now);restUntil=0;lastState=null;waitingSpawn=false;restartPending=false;suspendedAt=-1;retryAt=0;settle=now+250;}
++  private function reset(now:int):void{cheeseConfirmed=false;cheeseWaitUntil=-1;release();running=false;attempted=false;paused=false;failure="";won=false;entering=false;holeWaitUntil=0;sequence=null;index=0;lastWalkAt=-1;hasSample=false;synchronized=false;timing.reset(now);restUntil=0;lastState=null;waitingSpawn=false;restartPending=false;suspendedAt=-1;retryAt=0;settle=now+250;}
+   public function setFocused(value:Boolean):void{focused=value;if(!value)release();}
+   public function setTiming(policy:RouteTiming):void{timing=policy ? policy : new RouteTiming(1,false);}
+   private function hasMovement(route:Array):Boolean{for each(var step:Array in route){if(step[1]=="hole")return false;if(step[1]=="walk")return true;}return false;}
+@@ -140,9 +140,16 @@
+    }
+    var count:int=0;var walks:int=0;
+    while(running && now>=due && count<256){
+-    var step:Array=sequence[index];if(String(step[1])=="walk"){if(walks>=1)break;walks++;}
++    var step:Array=sequence[index];if(String(step[1])=="walk"){if(walks>=1 || (lastWalkAt>=0 && now-lastWalkAt<33))break;walks++;}
+     if(now-due>500 && cheeseWaitUntil<0)throw new Error("Janela atrasada; reinicie a rota",2603);
+-    if(!apply(step,k,now))return;index++;count++;
++    if(!apply(step,k,now))return;
++    if(String(step[1])=="walk"){
++     lastWalkAt=now;
++     // Rebase after a delayed frame instead of catching up with a movement burst.
++     // Keep the recorded delay to the next sample and the original execution path.
++     if(now>due)due=now;
++    }
++    index++;count++;
+     if(entering)break;
+     if(index>=sequence.length){running=false;release();break;}
+     due+=Number(sequence[index][2]);
+--- a/fontes-robot/RoutePlayerNative.as
++++ b/fontes-robot/RoutePlayerNative.as
+@@ -6,7 +6,7 @@
+   private var focused:Boolean=true;private var suspendedAt:int=-1;private var roundToken:String="";private var restartPending:Boolean=false;private var waitingSpawn:Boolean=false;private var restUntil:int=0;private var restAt:int=0;private var lastState:Object;private var timing:RouteTiming;private var synchronized:Boolean=false;
+   private var remote:Boolean=true;private var loadingCode:String="";private var failedCode:String="";private var cacheOrder:Array=[];private var root:MovieClip;private var motion:NativeMotion;private var routes:Object;private var loadError:String="";private var loader:URLLoader;
+   private var map:Object;private var player:Object;private var body:Object;private var code:String="";private var aliveBefore:Boolean=false;
+-  private var sequence:Array;private var index:int=0;private var due:Number=0;private var settle:int=0;private var enabled:Boolean=false;private var attempted:Boolean=false;private var running:Boolean=false;private var paused:Boolean=false;
++  private var sequence:Array;private var index:int=0;private var due:Number=0;private var lastWalkAt:Number=-1;private var settle:int=0;private var enabled:Boolean=false;private var attempted:Boolean=false;private var running:Boolean=false;private var paused:Boolean=false;
+   private var mirror:Boolean=false;private var width:Number=800;private var pauseMessage:String="Robot: pausado; reative para reiniciar";private var hasSample:Boolean=false;private var won:Boolean=false;private var entering:Boolean=false;private var holeWaitUntil:int=0;private var retryAt:int=0;private var failure:String="";public var message:String="Robot: aguardando jogo";
+   public function RoutePlayerNative(value:MovieClip,external:Boolean=false){managed=external;root=value;timing=new RouteTiming(uint(getTimer())^uint(Math.random()*2147483647));motion=NativeMotion.get(value);if(!managed)motion.observeWith(packet);routes={};}
+   public function setManagedActive(value:Boolean):void{if(!managed)return;managedOn=value;if(!value){cancelLoad();reset(getTimer());enabled=false;}}
+@@ -45,7 +45,7 @@
+   private function status(text:String):void{message=text;var ui:Object=root["Interface"];if(ui && ui["status_field"])ui["status_field"].text=text;}
+   private function release():void{motion.release(this);}
+   public function pause():void{if(!enabled)return;release();running=false;paused=true;pauseMessage="Robot: pausado pela tecla; reative para reiniciar";status(pauseMessage);}
+-  private function reset(now:int):void{cheeseConfirmed=false;cheeseWaitUntil=-1;release();running=false;attempted=false;paused=false;failure="";won=false;entering=false;holeWaitUntil=0;sequence=null;index=0;hasSample=false;synchronized=false;timing.reset(now);restUntil=0;lastState=null;waitingSpawn=false;restartPending=false;suspendedAt=-1;retryAt=0;settle=now+250;}
++  private function reset(now:int):void{cheeseConfirmed=false;cheeseWaitUntil=-1;release();running=false;attempted=false;paused=false;failure="";won=false;entering=false;holeWaitUntil=0;sequence=null;index=0;lastWalkAt=-1;hasSample=false;synchronized=false;timing.reset(now);restUntil=0;lastState=null;waitingSpawn=false;restartPending=false;suspendedAt=-1;retryAt=0;settle=now+250;}
+   public function setFocused(value:Boolean):void{focused=value;if(!value)release();}
+   public function setTiming(policy:RouteTiming):void{timing=policy ? policy : new RouteTiming(1,false);}
+   private function hasMovement(route:Array):Boolean{for each(var step:Array in route){if(step[1]=="hole")return false;if(step[1]=="walk")return true;}return false;}
+@@ -140,9 +140,16 @@
+    }
+    var count:int=0;var walks:int=0;
+    while(running && now>=due && count<256){
+-    var step:Array=sequence[index];if(String(step[1])=="walk"){if(walks>=1)break;walks++;}
++    var step:Array=sequence[index];if(String(step[1])=="walk"){if(walks>=1 || (lastWalkAt>=0 && now-lastWalkAt<33))break;walks++;}
+     if(now-due>500 && cheeseWaitUntil<0)throw new Error("Janela atrasada; reinicie a rota",2603);
+-    if(!apply(step,k,now))return;index++;count++;
++    if(!apply(step,k,now))return;
++    if(String(step[1])=="walk"){
++     lastWalkAt=now;
++     // Rebase after a delayed frame instead of catching up with a movement burst.
++     // Keep the recorded delay to the next sample and the original execution path.
++     if(now>due)due=now;
++    }
++    index++;count++;
+     if(entering)break;
+     if(index>=sequence.length){running=false;release();break;}
+     due+=Number(sequence[index][2]);
+--- a/fontes-robot/RobotTests.as
++++ b/fontes-robot/RobotTests.as
+@@ -39,7 +39,7 @@
+     var f:Object=fixture(display);f.body.velocity.vx=7;f.body.velocity.vy=-3;f.bot.advance(0);f.bot.advance(300);f.bot.advance(741);check(f.calls.length==0,"first recorded delay respected");f.bot.advance(742);check(f.calls.length==1 && f.player.x==118.5,"first target uses native physics and visual position");check(f.body.velocity.vx==7 && f.body.velocity.vy==-3,"Robot preserves native velocity instead of writing recorded VX/VY");check(f.jumps.length==0,"no direct jump/frame invocation at recorded step");var jumpDown:int=0;for each(var key:Object in f.keys)if(key.code==38 && key.down)jumpDown++;check(jumpDown==1,"real jump uses the same native keyboard path as Follow");f.bot.advance(792);check(f.calls.length==1 && f.player.x==118.5,"no interpolation or position writes between recorded timestamps");check(Math.abs(f.calls[0].x*30-f.player.x)<0.00001 && f.body.velocity.vx==7 && f.body.velocity.vy==-3,"last recorded pose remains aligned without velocity writes");f.bot.advance(842);check(f.player.x==148.5,"second recorded direction/jump state applied at original deadline");var jumpUp:int=0;jumpDown=0;for each(key in f.keys)if(key.code==38){if(key.down)jumpDown++;else jumpUp++;}check(jumpDown==1 && jumpUp==1,"held jump is neither repeated per frame nor triggered by recorded animation frame");f.bot.advance(879);var endingCalls:int=f.calls.length;f.bot.advance(1000);check(f.calls.length==endingCalls,"terminal cheese/hole segment hands movement to native physics");f.bot.advance(1289);check(!f.player.right && f.markers.length==0 && f.bot.message.indexOf("confirmacao")>=0,"hole releases controls and waits for real confirmation without forced packets");f.bot.advance(9000);check(f.calls.length==endingCalls,"no position writes after entering hole wait");
+     f=fixture(display,[walk(100,0),walk(200,100),["hole",100]]);delete f.root.Keys.physics_state;delete f.root.Keys.physics_state_vx;delete f.root.Keys.physics_state_vy;f.bot.advance(0);f.bot.advance(300);f.bot.advance(350);f.bot.advance(400);check(f.player.x==60 && f.bot.message.indexOf("erro")<0,"Follow-based Robot does not require or invent velocity mappings");
+     f=fixture(display,[walk(1000,0,false),walk(1100,100,false),["hole",100]]);f.map.container.mirror=true;f.player.x=500;f.bot.advance(0);f.bot.advance(300);f.bot.advance(350);check(f.player.x==500 && f.player.left,"mirrored recorded pose remains unchanged between samples");
+-    f=fixture(display,[walk(100,0),walk(200,0),["hole",0]]);f.bot.advance(0);f.bot.advance(300);check(f.calls.length==1,"one recorded movement consumed per frame even for zero delays");f.bot.advance(301);check(f.calls.length==2 && f.markers.length==0,"zero delay states preserve order without forced hole packet");
++    f=fixture(display,[walk(100,0),walk(200,0),["hole",0]]);f.bot.advance(0);f.bot.advance(300);check(f.calls.length==1,"one recorded movement consumed per frame even for zero delays");f.bot.advance(301);f.bot.advance(316);f.bot.advance(332);check(f.calls.length==1,"zero-delay movement states wait at least 33 ms instead of sending a burst");f.bot.advance(333);check(f.calls.length==2 && f.markers.length==0,"zero delay states preserve order after 33 ms without forced hole packet");
+     var verticalFirst:Array=walk(100,0,false);var verticalNext:Array=walk(100,200,false);verticalNext[0].y=1989;f=fixture(display,[verticalFirst,verticalNext,["hole",100]]);f.bot.advance(0);f.bot.advance(300);f.bot.advance(400);check(Math.abs(f.player.y-330.6)<0.00001,"266px record is not anticipated or interpolated");f.bot.advance(500);check(Math.abs(f.player.y-596.7)<0.00001 && f.bot.message.indexOf("pausado")<0,"recorded transition no longer trips local divergence pause");check(f.body.velocity.vx==0 && f.body.velocity.vy==0,"large target transition also preserves engine velocity");
+     f=fixture(display,[walk(100,0),["hole",100]]);f.player.x=-500;f.bot.advance(0);f.bot.advance(300);check(f.calls.length==0 && f.bot.message.indexOf("aguardando renascer")>=0,"incorrect initial spawn waits without teleport across map");
+     f=fixture(display,[walk(100,0),walk(200,100),["hole",100]]);f.bot.advance(0);f.bot.advance(300);f.bot.setFocused(false);f.bot.advance(320);var held:int=f.calls.length;f.bot.advance(1000);check(f.calls.length==held && !f.player.right,"focus loss releases keys and stops Follow position writes");f.bot.setFocused(true);f.bot.advance(1100);check(Math.abs(f.player.x-30)<0.00001,"focus return resumes keys without inventing an intermediate coordinate");f.root.auto_play=false;f.bot.advance(1200);f.bot.advance(9000);check(!f.player.right,"disable releases keys and prevents later movement");
