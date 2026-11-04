@@ -1,0 +1,23 @@
+import com.jpexs.decompiler.flash.*;import com.jpexs.decompiler.flash.tags.*;import com.jpexs.decompiler.flash.abc.*;import com.jpexs.decompiler.flash.abc.types.*;import com.jpexs.decompiler.flash.abc.types.traits.*;import com.jpexs.decompiler.flash.abc.avm2.*;import com.jpexs.decompiler.flash.abc.avm2.instructions.*;import java.io.*;import java.util.*;
+class RemoveRouteTeleports {
+ static ABC abc(SWF s){for(Tag t:s.getTags())if(t instanceof DoABC2Tag&&((DoABC2Tag)t).getABC().findClassByName("disney.NativeMotion")>=0)return ((DoABC2Tag)t).getABC();throw new IllegalStateException("Missing NativeMotion");}
+ static MethodBody body(ABC a,String cl,String name){int ci=a.findClassByName(cl);for(var t:a.instance_info.get(ci).instance_traits.traits)if(t instanceof TraitMethodGetterSetter&&name.equals(a.constants.getString(a.constants.getMultiname(t.name_index).name_index)))return a.findBody(((TraitMethodGetterSetter)t).method_info);throw new IllegalStateException(cl+"."+name);}
+ static AVM2Instruction op(int code,int...args){return new AVM2Instruction(0,code,args);}
+ static void replace(MethodBody body,AVM2Instruction...instructions){AVM2Code code=new AVM2Code();code.code=new ArrayList<>(Arrays.asList(instructions));body.setCode(code);body.exceptions=new ABCException[0];body.max_stack=Math.max(5,body.max_stack);body.max_scope_depth=Math.max(body.max_scope_depth,body.init_scope_depth+1);body.setModified();}
+ public static void main(String[]args)throws Exception{
+  SWF original=new SWF(new FileInputStream(args[0]),false),patched=new SWF(new FileInputStream(args[0]),false);ABC a=abc(original),b=abc(patched);Set<Integer> expected=new TreeSet<>();
+  for(String name:List.of("place","synchronizeCurrent")){MethodBody m=body(b,"disney.NativeMotion",name);expected.add(m.method_info);replace(m,op(0xd0),op(0x30),op(0x47));}
+  MethodBody sample=body(b,"disney.NativeMotion","followSample");expected.add(sample.method_info);int movement=b.constants.getQnameId("movement",0x16,"",true);replace(sample,op(0xd0),op(0x30),op(0xd0),op(0xd1),op(0xd2),op(0xd3),op(0x62,4),op(0x4f,movement,4),op(0x47));
+  MethodBody update=body(b,"disney.FollowControllerV13Shared","update");var code=update.getCode();int start=-1,end=-1;
+  for(int i=1;i+1<code.code.size();i++){var instruction=code.code.get(i);if((instruction.definition.instructionCode==0x60 || instruction.definition.instructionCode==0x66) && "needsSync".equals(b.constants.getString(b.constants.getMultiname(instruction.operands[0]).name_index)) && code.code.get(i+1).definition.instructionCode==0x12){if(start!=-1)throw new IllegalStateException("Ambiguous sync guard");start=instruction.definition.instructionCode==0x60 ? i : i-1;end=code.adr2pos(code.code.get(i+1).getTargetAddress());}}
+  if(start<0||end<=start)throw new IllegalStateException("Sync guard not found");boolean encoder=false;
+  for(int i=start;i<end;i++){var instruction=code.code.get(i);if((instruction.definition.instructionCode==0x46||instruction.definition.instructionCode==0x4f)&&"encodePosition".equals(b.constants.getString(b.constants.getMultiname(instruction.operands[0]).name_index)))encoder=true;}
+  if(!encoder)throw new IllegalStateException("Guard does not contain position encoder");for(int i=end-1;i>=start;i--)code.removeInstruction(i,update);update.setModified();expected.add(update.method_info);
+  Set<Integer> changed=new TreeSet<>();for(var before:a.bodies)if(!Arrays.equals(before.getCodeBytes(),b.findBody(before.method_info).getCodeBytes()))changed.add(before.method_info);
+  if(!changed.equals(expected)||b.method_info.size()!=a.method_info.size()||b.instance_info.size()!=a.instance_info.size())throw new IllegalStateException("Unexpected changes: "+changed);
+  for(int method:expected){var m=b.findBody(method);var stats=m.getCode().getStats(b,m,m.init_scope_depth,false);if(stats==null||stats.maxstack>m.max_stack||stats.maxscope>m.max_scope_depth)throw new IllegalStateException("Invalid bounds at "+method);}
+  int labels=0;for(int i=1;i<b.constants.getStringCount();i++)if("Follow v13: coordenadas da v3 | ".equals(b.constants.getString(i))){b.constants.setString(i,"Follow v13: teclas internas | ");labels++;}if(labels!=1)throw new IllegalStateException("Unexpected status label count: "+labels);
+  for(Tag t:patched.getTags())if(t instanceof DoABC2Tag && ((DoABC2Tag)t).getABC()==b)t.setModified(true);patched.setModified(true);try(var out=new FileOutputStream(args[1])){patched.saveTo(out);}
+  System.out.println("PASS: only NativeMotion.place, synchronizeCurrent, followSample and FollowControllerV13Shared.update changed; all other original method bodies preserved");
+ }
+}
