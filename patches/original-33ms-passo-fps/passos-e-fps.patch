@@ -1,0 +1,391 @@
+--- a/fontes-autoplay/RoutePlayer.as
++++ b/fontes-autoplay/RoutePlayer.as
+@@ -178,7 +178,7 @@
+     // Horizontal microadjustment while moving; no random sleeps or extra packets.
+     var eligible:Boolean=!p.jump && p.vy==0 && p.mr!=p.ml && p.vx!=0;
+     p.x+=timing.coordinateX(eligible);
+-    motion.followSample(this,p.ml,p.mr,p.jump,p.x,p.y);lastState=p;hasSample=true;
++    motion.movement(this,p.ml,p.mr,p.jump);lastState=p;hasSample=true;
+    }else if(action=="crouch" || action=="duck")motion.crouch(this,Number(step[0])!=0);
+    else if(action=="cheese"){
+     if(managed){
+--- a/fontes-followautobest/AutoBestTests.as
++++ b/fontes-followautobest/AutoBestTests.as
+@@ -12,7 +12,7 @@
+    var observed:int=0;NativeMotion.get(r).observeWith(function(bytes:ByteArray):void{observed++;});var best:FollowAutoBest=new FollowAutoBest(r);var opaque:ByteArray=new ByteArray();opaque.writeByte(99);opaque.writeByte(99);opaque.position=0;NativeMotion.observe(r,opaque);check(observed==1,"managed replay does not replace the existing Robot packet observer");var jumpDowns:int=0;r.stage.addEventListener(KeyboardEvent.KEY_DOWN,function(e:KeyboardEvent):void{if(e.keyCode==38)jumpDowns++;});check(!best.enabled,"starts disabled");best.toggle();best.tick(0);check(best.enabled,"toggle enables persistent mode");
+    best.packet(profile("Alpha#0001",50),10);best.packet(profile("Beta#0001",150),10);best.packet(profile("Idle#0001",10000),10);best.packet(profile("Self#0001",99999),10);
+    best.packet(move(10),20);best.packet(move(11),20);best.packet(move(7),20);best.tick(500);check(best.targetName=="beta#0001","highest real firsts among moving nonlocal players; idle high firsts ignored");check(placements==0,"records first without moving local player");
+-   best.packet(move(11,110,100,true),550);best.packet(marker(144,6,10),600);best.packet(marker(8,6,10),650);check(best.phase=="observando","other player's cheese and win do not complete selected route");best.packet(marker(144,6,11),650);best.packet(move(11,120),700);best.packet(marker(8,6,11),800);check(best.phase=="pronto","selected cheese and actual victory complete recording");map.container.reverse=true;r.auto_play=true;best.tick(800);check(best.phase=="pronto" && placements==0,"manual Robot prevents automatic replay from competing for movement");r.auto_play=false;best.tick(800);check(best.phase=="reproduzindo" && !r.auto_play,"managed replay starts without activating legacy/global Robot");check(placements==0,"initial release wait respected");best.tick(1100);check(placements==1 && Math.abs(self.x-30)<0.001,"replay uses actual room coordinates once, even on mirrored maps");best.tick(1150);check(placements==2 && self.x==33,"recorded 50ms movement delay respected");check(jumpDowns>0,"recorded jump uses actual native key input");best.tick(1200);best.tick(1250);check(placements==2 && best.message.indexOf("queijo nativo")>=0,"replay waits for actual local cheese instead of assuming recorded marker succeeded");best.packet(marker(144,6,7),1250);best.tick(1250);best.tick(1300);check(placements==3 && self.x==36,"cheese marker does not invent movement or skip next sample");best.tick(1400);check(best.message.indexOf("confirmacao")>=0,"hole waits for native confirmation");var before:int=placements;best.tick(1500);check(placements==before,"no pose writes while waiting in hole");best.packet(marker(8,6,7),1550);check(best.phase=="aguardando renascer" && best.enabled,"local victory releases replay but leaves mode enabled");best.packet(marker(144,2,99),1600);check(best.phase=="aguardando renascer","other respawn ignored");best.packet(marker(144,2,7),1700);check(best.phase=="observando" && best.enabled,"own respawn starts new search without disabling");
++   best.packet(move(11,110,100,true),550);best.packet(marker(144,6,10),600);best.packet(marker(8,6,10),650);check(best.phase=="observando","other player's cheese and win do not complete selected route");best.packet(marker(144,6,11),650);best.packet(move(11,120),700);best.packet(marker(8,6,11),800);check(best.phase=="pronto","selected cheese and actual victory complete recording");map.container.reverse=true;r.auto_play=true;best.tick(800);check(best.phase=="pronto" && placements==0,"manual Robot prevents automatic replay from competing for movement");r.auto_play=false;best.tick(800);check(best.phase=="reproduzindo" && !r.auto_play,"managed replay starts without activating legacy/global Robot");check(placements==0,"initial release wait respected");best.tick(1100);check(placements==0 && Math.abs(self.x-30)<0.001,"replay emits native keys without assigning recorded room coordinates");best.tick(1150);check(placements==0 && self.x==30,"recorded 50ms movement input never assigns its target coordinates");check(jumpDowns>0,"recorded jump uses actual native key input");best.tick(1200);best.tick(1250);check(placements==0 && best.message.indexOf("queijo nativo")>=0,"replay waits for actual local cheese instead of assuming recorded marker succeeded");best.packet(marker(144,6,7),1250);best.tick(1250);best.tick(1300);check(placements==0 && self.x==30,"cheese marker does not teleport to the next recorded sample");best.tick(1400);check(best.message.indexOf("confirmacao")>=0,"hole waits for native confirmation");var before:int=placements;best.tick(1500);check(placements==before,"no pose writes while waiting in hole");best.packet(marker(8,6,7),1550);check(best.phase=="aguardando renascer" && best.enabled,"local victory releases replay but leaves mode enabled");best.packet(marker(144,2,99),1600);check(best.phase=="aguardando renascer","other respawn ignored");best.packet(marker(144,2,7),1700);check(best.phase=="observando" && best.enabled,"own respawn starts new search without disabling");
+    best.packet(move(10),1800);best.packet(move(11),1800);best.tick(2000);delete r.tfm.players[11];best.tick(2500);check(best.targetName=="alpha#0001" && best.enabled,"leaving target automatically replaced");a.dead=true;best.tick(3000);check(best.targetName=="" && best.enabled,"dead target removed while mode keeps searching");a.dead=false;best.packet(move(10),3100);best.tick(3500);best.packet(marker(8,6,10),3600);check(best.phase=="observando" && best.message.indexOf("parcial")>=0,"partial route without cheese never plays a hole-only shortcut");
+    r.current_round_code=2;best.tick(4000);check(best.targetName=="" && best.enabled,"new round clears old route but keeps command armed");best.toggle();check(!best.enabled && !NativeMotion.get(r).inputBusy(),"second command disables and releases keys");
+    var unknown:Object={id:13,nick:"New#0001",dead:false,clip:true};r.tfm.players={"7":self,"13":unknown};best.toggle();best.tick(5000);best.packet(move(13),5100);best.tick(5500);check(requests.length==1 && requests[0].cipher,"profile requests use native packet and cipher");requests[0].data.position=0;check(requests[0].c==6 && requests[0].cc==26 && requests[0].data.readUTF()=="profile New#0001","profile query format verified");best.tick(6000);check(requests.length==1,"no burst of profile requests while pending");check(best.packet(profile("New#0001",250),6100),"only matching pending profile is consumed to avoid popup");check(!best.packet(profile("Other#0001",500),6200),"unrelated manual profiles continue to native UI");best.tick(6500);check(best.targetName=="new#0001","new active player selected after actual profile response");
+--- a/fontes-interface/PerformanceControlsUI.as
++++ b/fontes-interface/PerformanceControlsUI.as
+@@ -9,7 +9,7 @@
+   private var root:MovieClip;
+   private var ui:Object;
+   private var host:DisplayObjectContainer;
+-  private var controls:Array=[{id:"ping",title:"Mostrar ping (RTT /ping)",on:false},{id:"fps",title:"Mostrar FPS",on:false},{id:"limit",title:"Limitar FPS",on:false},{id:"unlock",title:"Acima de 60 FPS (alvo 120)",on:false}];
++  private var controls:Array=[{id:"ping",title:"Mostrar ping (RTT /ping)",on:false},{id:"fps",title:"Mostrar FPS",on:false},{id:"limit",title:"Limitar FPS",on:false},{id:"unlock",title:"FPS Unlock (maximo do Player)",on:false}];
+   private var input:TextField;private var info:TextField;private var hud:TextField;
+   private var originalRate:Number;private var lastTarget:Number=-1;private var limitValue:Number=60;
+   private var frameStart:int=-1;private var frames:int=0;private var actualFps:Number=0;private var uiTick:int=-1000;
+@@ -19,8 +19,10 @@
+   public static function attach(target:MovieClip):void {
+    if(!target || !target.stage || attached[target])return;
+    var control:PerformanceControlsUI=new PerformanceControlsUI(target);attached[target]=control;
+-   target.stage.addEventListener(Event.ENTER_FRAME,function(e:Event):void{control.update();},false,1000);
+-   target.stage.addEventListener(Event.RESIZE,function(e:Event):void{control.positionHud();});
++   target.stage.addEventListener(Event.ENTER_FRAME,function(e:Event):void{control.update();},false,-1000);
++   var late:Function=function(e:Event):void{control.positionHud();control.applyRate();};
++   target.stage.addEventListener(Event.RESIZE,late);
++   target.stage.addEventListener(Event.EXIT_FRAME,late,false,-1000);
+   }
+   private function option(id:String):Object{for each(var item:Object in controls)if(item.id==id)return item;return null;}
+   private function paint(item:Object):void {
+@@ -79,7 +81,7 @@
+    ui=current;host=general;var start:Number=retire(ui);var added:Number=144;
+    for(var index:int=0;index<host.numChildren;index++){var existing:DisplayObject=host.getChildAt(index);if(existing.y>=start)existing.y+=added;}
+    for(var n:int=0;n<controls.length;n++)addRow(controls[n],start+n*26);
+-   info=label("FPS: use um limite de 1 a 120; ping medido pelo servidor.");info.name="sddsPerformanceInfo";info.x=0;info.y=start+106;info.width=510;info.height=36;info.wordWrap=true;host.addChild(info);
++   info=label("FPS: use um limite de 1 a 1000; ping medido pelo servidor.");info.name="sddsPerformanceInfo";info.x=0;info.y=start+106;info.width=510;info.height=36;info.wordWrap=true;host.addChild(info);
+   }
+   private function addRow(item:Object,y:Number):void {
+    var row:Sprite=new Sprite();row.name="sddsPerformance_"+item.id;row.x=0;row.y=y;
+@@ -94,15 +96,19 @@
+    });
+    if(item.id=="limit"){
+     input=new TextField();input.name="sddsPerformanceFpsInput";input.type=TextFieldType.INPUT;input.defaultTextFormat=new TextFormat("_sans",12,0xD7DEEC);input.background=true;input.backgroundColor=0x101827;input.border=true;input.borderColor=0x35405B;input.x=160;input.y=1;input.width=60;input.height=21;input.maxChars=4;input.restrict="0-9";input.text=String(limitValue);row.addChild(input);
+-    input.addEventListener(Event.CHANGE,function(e:Event):void{var value:Number=Number(input.text);if(isFinite(value) && value>=1){limitValue=Math.min(120,value);if(value>120)input.text="120";applyRate();}});
++    input.addEventListener(Event.CHANGE,function(e:Event):void{var value:Number=Number(input.text);if(isFinite(value) && value>=1){limitValue=Math.min(1000,value);if(value>1000)input.text="1000";applyRate();}});
+     input.addEventListener(KeyboardEvent.KEY_DOWN,function(e:KeyboardEvent):void{e.stopPropagation();});input.addEventListener(KeyboardEvent.KEY_UP,function(e:KeyboardEvent):void{e.stopPropagation();});
+    }
+    host.addChild(row);
+   }
+   private function applyRate():void {
+    if(!root.stage)return;
+-   if(lastTarget<0 && (option("limit").on || option("unlock").on))originalRate=root.stage.frameRate;
+-   var target:Number=option("limit").on ? limitValue : option("unlock").on ? 120 : originalRate;
++   if(!option("limit").on && !option("unlock").on){
++    if(lastTarget>=0){try{root.stage.frameRate=originalRate;lastTarget=-1;}catch(error:Error){if(info)info.text="O Flash recusou a taxa original #"+error.errorID;}}
++    return;
++   }
++   if(lastTarget<0)originalRate=root.stage.frameRate;
++   var target:Number=option("limit").on ? limitValue : option("unlock").on ? 1000 : originalRate;
+    if(lastTarget<0 && !option("limit").on && !option("unlock").on)return;
+    if(target==lastTarget && Math.abs(root.stage.frameRate-target)<0.1)return;
+    try{root.stage.frameRate=target;lastTarget=target;}catch(error:Error){if(info)info.text="O Flash recusou a taxa solicitada #"+error.errorID;}
+@@ -158,7 +164,8 @@
+    try{bindMenu();}catch(error:Error){if(info)info.text="Falha ao montar controles #"+error.errorID;}
+    if(frameStart<0){frameStart=now;frames=0;}else{frames++;if(now-frameStart>=1000){actualFps=frames*1000/(now-frameStart);frames=0;frameStart=now;}}
+    if(option("ping").on){if(pingSent<0 && now>=nextPing)beginPing(now);inspectPing(now);}
+-   if(now-uiTick>=200){uiTick=now;applyRate();draw();}
++   applyRate();
++   if(now-uiTick>=200){uiTick=now;draw();}
+   }
+  }
+ }
+--- /dev/null
++++ b/fontes-interface/PerformanceTests.as
+@@ -0,0 +1,58 @@
++// ActionScript 3 / PerformanceTests.as / Ruffle AVM2 / retirement, frame measurement and native ping request checks
++package disney {
++ import flash.geom.Rectangle;import flash.display.MovieClip;import flash.display.Sprite;import flash.events.MouseEvent;import flash.events.Event;import flash.text.TextField;import flash.external.ExternalInterface;
++ public class RgbMouseTests {
++  private static var count:int=0;
++  private static function check(ok:Boolean,name:String):void{if(!ok)throw new Error(name);count++;}
++  private static function row(y:Number):Sprite{var item:Sprite=new Sprite();item.y=y;item.graphics.beginFill(0);item.graphics.drawRect(0,0,100,24);return item;}
++  private static function click(general:Sprite,id:String):void{var control:Sprite=general.getChildByName("sddsPerformance_"+id) as Sprite;control.getChildAt(0).dispatchEvent(new MouseEvent(MouseEvent.CLICK));}
++  public static function run(display:MovieClip):void {
++   var result:String;
++   try{
++    var root:MovieClip=new MovieClip();display.addChild(root);var original:Number=root.stage.frameRate;root["mass_reduction"]=true;root["change_movement_speed"]=true;root["ping"]=777;
++    var general:Sprite=new Sprite();var mass:Sprite=row(10);mass.name="oldMass";var massBox:Sprite=new Sprite();mass.addChild(massBox);general.addChild(mass);
++    var speed:Sprite=row(36);speed.name="oldSpeed";var speedBox:Sprite=new Sprite();speed.addChild(speedBox);general.addChild(speed);
++    var other:Sprite=row(80);general.addChild(other);
++    var shortcuts:Sprite=new Sprite();var m:Sprite=row(0);var mb:Sprite=new Sprite();m.addChild(mb);shortcuts.addChild(m);var s:Sprite=row(26);var sb:Sprite=new Sprite();s.addChild(sb);shortcuts.addChild(s);
++    var me:Object={button:mb};var se:Object={button:sb};var keep:Object={};root["Interface"]={general_ui:general,keys_ui:shortcuts,mass_check_box:massBox,movement_check_box:speedBox,keys:{mass:me,movement:se,other:keep}};root["KeyboardHandler"]={shortcuts:{F9:me,"CTRL F1":se,Q:keep}};
++    var sent:Array=[];var connection:Object={send:function(command:MockCommand):void{sent.push(command.command);}};
++    root["Keys"]={player:"mouse",socket_class:{main:connection},main_socket_instance:"main",data_sender:"send",command_packet_class:MockCommand};root["tfm"]={mouse:{}};
++    var chat:TextField=new TextField();chat.name="nativeChat";chat.text="Welcome";root.addChild(chat);
++    var controller:PerformanceControlsUI=new PerformanceControlsUI(root);controller.update(0);
++    check(!root.mass_reduction && !root.change_movement_speed,"retired flags disabled");
++    check(general.getChildByName("oldMass")==null && general.getChildByName("oldSpeed")==null,"retired rows removed");
++    check(root.Interface.keys.mass==null && root.Interface.keys.movement==null && root.Interface.keys.other===keep,"retired saved controls removed");
++    check(root.KeyboardHandler.shortcuts.F9==null && root.KeyboardHandler.shortcuts["CTRL F1"]==null && root.KeyboardHandler.shortcuts.Q===keep && shortcuts.numChildren==0,"retired shortcut rows and bindings removed");
++    check(other.y==28,"only retired rows reflowed; performance rows appended");
++    var children:int=general.numChildren;controller.update(10);check(general.numChildren==children,"no duplicate performance rows");
++    check(general.getChildByName("sddsPerformance_ping")!=null && general.getChildByName("sddsPerformance_fps")!=null && general.getChildByName("sddsPerformance_limit")!=null && general.getChildByName("sddsPerformance_unlock")!=null,"four controls created");
++    check(sent.length==0,"ping off sends nothing");
++    var limitRow:Sprite=general.getChildByName("sddsPerformance_limit") as Sprite;var input:TextField=limitRow.getChildAt(1) as TextField;input.text="30";input.dispatchEvent(new Event(Event.CHANGE));click(general,"limit");check(root.stage.frameRate==30,"30 FPS limit applied");
++    click(general,"fps");for(var frame:int=1;frame<=59;frame++)controller.update(Math.round(frame*1000/59));
++    click(general,"fps");click(general,"fps");var hud:TextField=root.stage.getChildByName("sddsPerformanceHud") as TextField;check(hud.visible && hud.text.indexOf("FPS: 60.0")>=0 && hud.text.indexOf("alvo 30")>=0,"FPS counts actual frames rather than configured limit");
++    click(general,"unlock");check(root.stage.frameRate==1000,"unlock requests maximum 1000 FPS allowed by Player");
++    root.stage.frameRate=60;controller.update(1001);check(root.stage.frameRate==1000,"unlock reapplies every update without waiting for the 200ms HUD cadence");
++    click(general,"unlock");check(root.stage.frameRate==original,"original rate restored");
++    root.stage.frameRate=75;controller.update(1002);check(root.stage.frameRate==75,"disabled unlock no longer forces the original rate every frame");
++    click(general,"unlock");check(root.stage.frameRate==1000,"unlock can be re-enabled after another component changes FPS");click(general,"unlock");check(root.stage.frameRate==75,"new activation restores the freshly captured rate");root.stage.frameRate=original;
++    input.text="90";input.dispatchEvent(new Event(Event.CHANGE));click(general,"limit");check(root.stage.frameRate==90,"custom rate above 60 supported");
++    input.text="9999";input.dispatchEvent(new Event(Event.CHANGE));check(input.text=="1000" && root.stage.frameRate==1000,"unsupported requested range capped");
++    input.text="";input.dispatchEvent(new Event(Event.CHANGE));check(root.stage.frameRate==1000,"editing empty FPS value preserves last valid rate");click(general,"limit");check(root.stage.frameRate==original,"disabling limiter restores original");
++    check(PerformanceControlsUI.isPingReply("Pong!") && PerformanceControlsUI.isPingReply("Servidor: Ping: 45 ms"),"native ping reply patterns recognized");check(!PerformanceControlsUI.isPingReply("Player: ping 45 ms") && !PerformanceControlsUI.isPingReply("Mostrar ping"),"chat and menu text are not ping replies");
++    click(general,"ping");controller.update(2000);check(sent.length==1 && sent[0]=="ping","native ping command sent: "+hud.text+" sent="+sent.length);chat.text+="\nPong!";controller.update(2300);check(hud.text.indexOf("300 ms")>=0 && hud.text.indexOf("777")<0,"ping measures request-response time without random value");
++    controller.update(2500);check(sent.length==1,"ping rate limited");
++    controller.update(12000);check(sent.length==2,"next ping after ten seconds");controller.update(20100);check(hud.text.indexOf("sem resposta")>=0,"missing reply reported honestly");
++    click(general,"ping");controller.update(40000);check(sent.length==2,"disabling ping stops requests");
++    click(general,"ping");controller.update(40100);controller.update(40300);check(hud.text.indexOf("medindo")>=0,"old Pong text does not satisfy a new request");click(general,"ping");click(general,"fps");check(!hud.visible,"HUD hidden when both displays off");
++    var attachedRoot:MovieClip=new MovieClip();display.addChild(attachedRoot);var attachedGeneral:Sprite=new Sprite();attachedRoot.Keys={};attachedRoot.Interface={general_ui:attachedGeneral,keys_ui:new Sprite(),keys:{}};
++    PerformanceControlsUI.attach(attachedRoot);attachedRoot.stage.dispatchEvent(new Event(Event.ENTER_FRAME));click(attachedGeneral,"unlock");check(attachedRoot.stage.frameRate==1000,"attached FPS control activates the real stage unlock");
++    attachedRoot.stage.frameRate=60;attachedRoot.stage.dispatchEvent(new Event(Event.EXIT_FRAME));check(attachedRoot.stage.frameRate==1000,"EXIT_FRAME hook defeats a lower rate set later by game code");
++    click(attachedGeneral,"unlock");check(attachedRoot.stage.frameRate==original,"attached unlock restores baseline when disabled");
++    attachedRoot.stage.frameRate=90;attachedRoot.stage.dispatchEvent(new Event(Event.EXIT_FRAME));check(attachedRoot.stage.frameRate==90,"inactive EXIT_FRAME hook leaves later game rate choices alone");attachedRoot.stage.frameRate=original;
++    result="PASS: "+count+" performance control checks";
++   }catch(error:Error){result="FAIL: "+error.message+" #"+error.errorID;}
++   ExternalInterface.call("recordTest",result);
++  }
++ }
++}
++class MockCommand {public var command:String;public function MockCommand(value:String){command=value;}}
+--- a/fontes-robot/PerformanceControlsUI.as
++++ b/fontes-robot/PerformanceControlsUI.as
+@@ -9,7 +9,7 @@
+   private var root:MovieClip;
+   private var ui:Object;
+   private var host:DisplayObjectContainer;
+-  private var controls:Array=[{id:"ping",title:"Mostrar ping (RTT /ping)",on:false},{id:"fps",title:"Mostrar FPS",on:false},{id:"limit",title:"Limitar FPS",on:false},{id:"unlock",title:"Acima de 60 FPS (alvo 120)",on:false}];
++  private var controls:Array=[{id:"ping",title:"Mostrar ping (RTT /ping)",on:false},{id:"fps",title:"Mostrar FPS",on:false},{id:"limit",title:"Limitar FPS",on:false},{id:"unlock",title:"FPS Unlock (maximo do Player)",on:false}];
+   private var input:TextField;private var info:TextField;private var hud:TextField;
+   private var originalRate:Number;private var lastTarget:Number=-1;private var limitValue:Number=60;
+   private var frameStart:int=-1;private var frames:int=0;private var actualFps:Number=0;private var uiTick:int=-1000;
+@@ -19,8 +19,10 @@
+   public static function attach(target:MovieClip):void {
+    if(!target || !target.stage || attached[target])return;
+    var control:PerformanceControlsUI=new PerformanceControlsUI(target);attached[target]=control;
+-   target.stage.addEventListener(Event.ENTER_FRAME,function(e:Event):void{control.update();},false,1000);
+-   target.stage.addEventListener(Event.RESIZE,function(e:Event):void{control.positionHud();});
++   target.stage.addEventListener(Event.ENTER_FRAME,function(e:Event):void{control.update();},false,-1000);
++   var late:Function=function(e:Event):void{control.positionHud();control.applyRate();};
++   target.stage.addEventListener(Event.RESIZE,late);
++   target.stage.addEventListener(Event.EXIT_FRAME,late,false,-1000);
+   }
+   private function option(id:String):Object{for each(var item:Object in controls)if(item.id==id)return item;return null;}
+   private function paint(item:Object):void {
+@@ -79,7 +81,7 @@
+    ui=current;host=general;var start:Number=retire(ui);var added:Number=144;
+    for(var index:int=0;index<host.numChildren;index++){var existing:DisplayObject=host.getChildAt(index);if(existing.y>=start)existing.y+=added;}
+    for(var n:int=0;n<controls.length;n++)addRow(controls[n],start+n*26);
+-   info=label("FPS: use um limite de 1 a 120; ping medido pelo servidor.");info.name="sddsPerformanceInfo";info.x=0;info.y=start+106;info.width=510;info.height=36;info.wordWrap=true;host.addChild(info);
++   info=label("FPS: use um limite de 1 a 1000; ping medido pelo servidor.");info.name="sddsPerformanceInfo";info.x=0;info.y=start+106;info.width=510;info.height=36;info.wordWrap=true;host.addChild(info);
+   }
+   private function addRow(item:Object,y:Number):void {
+    var row:Sprite=new Sprite();row.name="sddsPerformance_"+item.id;row.x=0;row.y=y;
+@@ -94,15 +96,19 @@
+    });
+    if(item.id=="limit"){
+     input=new TextField();input.name="sddsPerformanceFpsInput";input.type=TextFieldType.INPUT;input.defaultTextFormat=new TextFormat("_sans",12,0xD7DEEC);input.background=true;input.backgroundColor=0x101827;input.border=true;input.borderColor=0x35405B;input.x=160;input.y=1;input.width=60;input.height=21;input.maxChars=4;input.restrict="0-9";input.text=String(limitValue);row.addChild(input);
+-    input.addEventListener(Event.CHANGE,function(e:Event):void{var value:Number=Number(input.text);if(isFinite(value) && value>=1){limitValue=Math.min(120,value);if(value>120)input.text="120";applyRate();}});
++    input.addEventListener(Event.CHANGE,function(e:Event):void{var value:Number=Number(input.text);if(isFinite(value) && value>=1){limitValue=Math.min(1000,value);if(value>1000)input.text="1000";applyRate();}});
+     input.addEventListener(KeyboardEvent.KEY_DOWN,function(e:KeyboardEvent):void{e.stopPropagation();});input.addEventListener(KeyboardEvent.KEY_UP,function(e:KeyboardEvent):void{e.stopPropagation();});
+    }
+    host.addChild(row);
+   }
+   private function applyRate():void {
+    if(!root.stage)return;
+-   if(lastTarget<0 && (option("limit").on || option("unlock").on))originalRate=root.stage.frameRate;
+-   var target:Number=option("limit").on ? limitValue : option("unlock").on ? 120 : originalRate;
++   if(!option("limit").on && !option("unlock").on){
++    if(lastTarget>=0){try{root.stage.frameRate=originalRate;lastTarget=-1;}catch(error:Error){if(info)info.text="O Flash recusou a taxa original #"+error.errorID;}}
++    return;
++   }
++   if(lastTarget<0)originalRate=root.stage.frameRate;
++   var target:Number=option("limit").on ? limitValue : option("unlock").on ? 1000 : originalRate;
+    if(lastTarget<0 && !option("limit").on && !option("unlock").on)return;
+    if(target==lastTarget && Math.abs(root.stage.frameRate-target)<0.1)return;
+    try{root.stage.frameRate=target;lastTarget=target;}catch(error:Error){if(info)info.text="O Flash recusou a taxa solicitada #"+error.errorID;}
+@@ -158,7 +164,8 @@
+    try{bindMenu();}catch(error:Error){if(info)info.text="Falha ao montar controles #"+error.errorID;}
+    if(frameStart<0){frameStart=now;frames=0;}else{frames++;if(now-frameStart>=1000){actualFps=frames*1000/(now-frameStart);frames=0;frameStart=now;}}
+    if(option("ping").on){if(pingSent<0 && now>=nextPing)beginPing(now);inspectPing(now);}
+-   if(now-uiTick>=200){uiTick=now;applyRate();draw();}
++   applyRate();
++   if(now-uiTick>=200){uiTick=now;draw();}
+   }
+  }
+ }
+--- a/fontes-robot/RobotTests.as
++++ b/fontes-robot/RobotTests.as
+@@ -1,72 +1,41 @@
+ package disney {
+- import ChargeurTransformice_fla.MainTimeline;import ChargeurTransformice_fla.Statements;import flash.display.MovieClip;import flash.events.Event;import flash.events.KeyboardEvent;import flash.events.IOErrorEvent;import flash.geom.Point;import flash.net.URLLoader;import flash.net.URLRequest;import flash.text.TextField;import flash.external.ExternalInterface;import flash.utils.setTimeout;import flash.utils.ByteArray;import flash.display.Sprite;
++ import flash.display.MovieClip;import flash.events.KeyboardEvent;import flash.geom.Point;import flash.text.TextField;import flash.utils.ByteArray;import flash.external.ExternalInterface;
+  public class RgbMouseTests {
+-  private static var count:int=0;private static function check(ok:Boolean,s:String):void{if(!ok)throw new Error(s);count++;}
+-  private static function walk(x:Number,delay:Number=100,j:Boolean=true):Array{return [{x:x,y:1102,vx:345,vy:65036,mr:true,ml:false,jump:j,frame:2},"walk",delay];}
+-  private static function fixture(display:MovieClip,steps:Array=null,sealedRoot:Boolean=false):Object{
+-   var r:MovieClip=sealedRoot ? new SealedRobotRoot() : new MovieClip();display.addChild(r);var calls:Array=[];var jumps:Array=[];var markers:Array=[];var syncs:Array=[];var keys:Array=[];
+-   var body:Object={velocity:{vx:0,vy:0},setPosition:function(p:Point,angle:Number):Boolean{calls.push({x:p.x,y:p.y});return true;}};
+-   var p:Object={x:118.5,y:330.6,body:body,clip:true,dead:false,left:false,right:false,down:false,side:true,jump:function(on:Boolean,frame:int=0):void{jumps.push({on:on,frame:frame});},crouch:function(s:Boolean):void{},stand:function(s:Boolean):void{}};
++  private static var count:int=0;
++  private static function check(ok:Boolean,text:String):void{if(!ok)throw new Error(text);count++;}
++  private static function walk(x:int,l:Boolean,r:Boolean,j:Boolean,delay:int):Array{return [{x:x,y:1102,vx:345,vy:65036,mr:r,ml:l,jump:j,frame:2},"walk",delay];}
++  public static function run(display:MovieClip):void{try{
++   var root:MovieClip=new MovieClip();display.addChild(root);root.stage.focus=root.stage;
++   var writes:int=0;var syncs:int=0;var keys:Array=[];
++   var body:Object={velocity:{vx:7,vy:-3},setPosition:function(p:Point,a:Number):Boolean{writes++;throw new Error("forbidden route reposition");}};
++   var player:Object={x:30,y:330.6,body:body,clip:true,dead:false,left:false,right:false,down:false,side:true,jump:function(...args):void{},crouch:function(...args):void{},stand:function(...args):void{}};
+    var map:Object={number:{value:123},container:{mirror:false}};
+-   if(steps && steps[0][1]=="walk"){p.x=int(Number(steps[0][0].x))/100*30;p.y=int(Number(steps[0][0].y))/100*30;}
+-   r.Keys={packet_handler_class:{receive:function(bytes:ByteArray):void{syncs.push(bytes);}},packet_handler:"receive",player:"mouse",player_list:"players",player_physics:"body",player_clip:"clip",is_dead:"dead",player_moving_left:"left",player_moving_right:"right",jump:"jump",is_down:"down",crouch:"crouch",crouch2:"stand",static_side:"side",physics_state:"velocity",physics_state_vx:"vx",physics_state_vy:"vy",bot_set_position:"setPosition",b2vec2:"Point",app_domain:{applicationDomain:{getDefinition:function(n:String):Class{return Point;}}},map_class:{current:map,width:800},map_instance:"current",bot_map_code_object:"number",bot_map_code_value:"value",obj_container:"container",bot_reverse:"mirror",bot_map_width:"width",move_class:{free:true},move_free:"free",timer_class:{locked:false},timer_prop:"locked"};
+-   r.tfm={mouse:p,players:[]};r.Interface={status_field:new TextField()};r.Statements={send_cheese_packet:function():void{markers.push("cheese");},send_hole_packet:function():void{markers.push("hole");}};r.host_url="";r.auto_play=true;r.auto_play_disable_on_move=true;
+-   var bot:RoutePlayerNative=new RoutePlayerNative(r);var library:Object={};library["@123"]=steps ? steps : [walk(395,442),walk(495,100,false),["cheese",37],["hole",410]];bot.setRoutes(library);bot.setTiming(new RouteTiming(1,false));
+-   r.stage.addEventListener(KeyboardEvent.KEY_DOWN,function(e:KeyboardEvent):void{if(!NativeMotion.isSynthetic(r) && r.auto_play_disable_on_move && e.keyCode==39)bot.pause();});
+-   r.stage.addEventListener(KeyboardEvent.KEY_DOWN,function(e:KeyboardEvent):void{if(NativeMotion.isSynthetic(r))keys.push({code:e.keyCode,down:true});});
+-   r.stage.addEventListener(KeyboardEvent.KEY_UP,function(e:KeyboardEvent):void{if(NativeMotion.isSynthetic(r))keys.push({code:e.keyCode,down:false});});
+-   return {keys:keys,root:r,bot:bot,body:body,player:p,map:map,calls:calls,jumps:jumps,markers:markers,library:library,syncs:syncs};
+-  }
+-  private static function verifyLoader(display:MovieClip,finished:Function):void{
+-   var f:Object=fixture(display);f.map.number.value=1628732;f.player.x=193.8;f.player.y=381;var bot:RoutePlayerNative=new RoutePlayerNative(f.root);bot.setTiming(new RouteTiming(1,false));bot.loadRoutes();var clock:int=0;var tries:int=0;
+-   f.root.auto_play=false;var initial:int=int(ExternalInterface.call("routeRequests"));bot.advance(0);
+-   setTimeout(function():void{try{
+-    check(int(ExternalInterface.call("routeRequests"))==initial,"disabled Robot startup performs zero route requests");
+-    f.root.auto_play=true;f.player.body=null;bot.advance(1000);
+-    setTimeout(function():void{try{
+-     check(int(ExternalInterface.call("routeRequests"))==initial,"animation/player initialization performs zero route requests");
+-     f.player.body=f.body;
+-     var tick:Function=function():void{try{bot.advance(clock);clock+=1000;tries++;
+-      if(f.calls.length>0){check(f.calls[0].x==6.46,"production loader fetches only real @1628732 route");check(int(ExternalInterface.call("routeRequests"))==initial+1,"only one small per-map request is needed");f.root.auto_play=false;bot.advance(clock);finished();}
+-      else if(tries>=2000)throw new Error("Production loader did not become ready: "+bot.message);
+-      else setTimeout(tick,1);
+-     }catch(error:Error){ExternalInterface.call("recordTest","FAIL: production loader "+error.message+" #"+error.errorID);}};tick();
+-    }catch(error:Error){ExternalInterface.call("recordTest","FAIL: boot "+error.message);}},100);
+-   }catch(error:Error){ExternalInterface.call("recordTest","FAIL: boot "+error.message);}},100);
+-  }
+-  public static function run(display:MovieClip):void{
+-   try{
+-    var f:Object=fixture(display);f.body.velocity.vx=7;f.body.velocity.vy=-3;f.bot.advance(0);f.bot.advance(300);f.bot.advance(741);check(f.calls.length==0,"first recorded delay respected");f.bot.advance(742);check(f.calls.length==1 && f.player.x==118.5,"first target uses native physics and visual position");check(f.body.velocity.vx==7 && f.body.velocity.vy==-3,"Robot preserves native velocity instead of writing recorded VX/VY");check(f.jumps.length==0,"no direct jump/frame invocation at recorded step");var jumpDown:int=0;for each(var key:Object in f.keys)if(key.code==38 && key.down)jumpDown++;check(jumpDown==1,"real jump uses the same native keyboard path as Follow");f.bot.advance(792);check(f.calls.length==1 && f.player.x==118.5,"no interpolation or position writes between recorded timestamps");check(Math.abs(f.calls[0].x*30-f.player.x)<0.00001 && f.body.velocity.vx==7 && f.body.velocity.vy==-3,"last recorded pose remains aligned without velocity writes");f.bot.advance(842);check(f.player.x==148.5,"second recorded direction/jump state applied at original deadline");var jumpUp:int=0;jumpDown=0;for each(key in f.keys)if(key.code==38){if(key.down)jumpDown++;else jumpUp++;}check(jumpDown==1 && jumpUp==1,"held jump is neither repeated per frame nor triggered by recorded animation frame");f.bot.advance(879);var endingCalls:int=f.calls.length;f.bot.advance(1000);check(f.calls.length==endingCalls,"terminal cheese/hole segment hands movement to native physics");f.bot.advance(1289);check(!f.player.right && f.markers.length==0 && f.bot.message.indexOf("confirmacao")>=0,"hole releases controls and waits for real confirmation without forced packets");f.bot.advance(9000);check(f.calls.length==endingCalls,"no position writes after entering hole wait");
+-    f=fixture(display,[walk(100,0),walk(200,100),["hole",100]]);delete f.root.Keys.physics_state;delete f.root.Keys.physics_state_vx;delete f.root.Keys.physics_state_vy;f.bot.advance(0);f.bot.advance(300);f.bot.advance(350);f.bot.advance(400);check(f.player.x==60 && f.bot.message.indexOf("erro")<0,"Follow-based Robot does not require or invent velocity mappings");
+-    f=fixture(display,[walk(1000,0,false),walk(1100,100,false),["hole",100]]);f.map.container.mirror=true;f.player.x=500;f.bot.advance(0);f.bot.advance(300);f.bot.advance(350);check(f.player.x==500 && f.player.left,"mirrored recorded pose remains unchanged between samples");
+-    f=fixture(display,[walk(100,0),walk(200,0),["hole",0]]);f.bot.advance(0);f.bot.advance(300);check(f.calls.length==1,"one recorded movement consumed per frame even for zero delays");f.bot.advance(301);f.bot.advance(316);f.bot.advance(332);check(f.calls.length==1,"zero-delay movement states wait at least 33 ms instead of sending a burst");f.bot.advance(333);check(f.calls.length==2 && f.markers.length==0,"zero delay states preserve order after 33 ms without forced hole packet");
+-    var verticalFirst:Array=walk(100,0,false);var verticalNext:Array=walk(100,200,false);verticalNext[0].y=1989;f=fixture(display,[verticalFirst,verticalNext,["hole",100]]);f.bot.advance(0);f.bot.advance(300);f.bot.advance(400);check(Math.abs(f.player.y-330.6)<0.00001,"266px record is not anticipated or interpolated");f.bot.advance(500);check(Math.abs(f.player.y-596.7)<0.00001 && f.bot.message.indexOf("pausado")<0,"recorded transition no longer trips local divergence pause");check(f.body.velocity.vx==0 && f.body.velocity.vy==0,"large target transition also preserves engine velocity");
+-    f=fixture(display,[walk(100,0),["hole",100]]);f.player.x=-500;f.bot.advance(0);f.bot.advance(300);check(f.calls.length==0 && f.bot.message.indexOf("aguardando renascer")>=0,"incorrect initial spawn waits without teleport across map");
+-    f=fixture(display,[walk(100,0),walk(200,100),["hole",100]]);f.bot.advance(0);f.bot.advance(300);f.bot.setFocused(false);f.bot.advance(320);var held:int=f.calls.length;f.bot.advance(1000);check(f.calls.length==held && !f.player.right,"focus loss releases keys and stops Follow position writes");f.bot.setFocused(true);f.bot.advance(1100);check(Math.abs(f.player.x-30)<0.00001,"focus return resumes keys without inventing an intermediate coordinate");f.root.auto_play=false;f.bot.advance(1200);f.bot.advance(9000);check(!f.player.right,"disable releases keys and prevents later movement");
+-    f=fixture(display,[walk(100,0),["hole",100]]);var lockCalls:int=0;f.body.setPosition=function(p:Point,a:Number):Boolean{lockCalls++;return false;};f.bot.advance(0);f.bot.advance(300);f.bot.advance(400);f.bot.advance(799);check(lockCalls==1,"locked native physics retries are throttled like Follow");f.body.setPosition=function(p:Point,a:Number):Boolean{lockCalls++;return true;};f.bot.advance(800);check(lockCalls==2 && f.player.x==30,"temporary native lock resumes same state after 500ms without overdue burst");
+-    f=fixture(display,[walk(100,0),["hole",100]]);f.root.current_round_code=1;f.root.Keys.player_id="pid";f.player.pid=7;f.bot.advance(0);f.bot.advance(300);f.root.current_round_code=2;f.bot.advance(350);f.bot.advance(600);check(f.calls.length==2,"same map/body with new round token restarts correct route");var birth:ByteArray=new ByteArray();birth.writeByte(144);birth.writeByte(2);birth.writeUTF("Self#0001");birth.writeInt(7);birth.position=1;NativeMotion.observe(f.root,birth);f.bot.advance(650);f.bot.advance(900);check(f.calls.length==3 && birth.position==1,"native local respawn restarts without missing a dead frame or modifying packet cursor");
+-    f=fixture(display,[walk(100,0),["hole",100]]);f.root.Keys.player_id="pid";f.player.pid=7;f.bot.advance(0);f.bot.advance(300);f.bot.advance(400);var victory:ByteArray=new ByteArray();victory.writeByte(8);victory.writeByte(6);victory.writeByte(0);victory.writeInt(99);victory.position=1;NativeMotion.observe(f.root,victory);f.bot.advance(450);check(f.bot.message.indexOf("vitoria confirmada")<0,"other player's victory does not complete Robot");victory.position=3;victory.writeInt(7);victory.position=1;NativeMotion.observe(f.root,victory);f.bot.advance(500);check(f.bot.message.indexOf("vitoria confirmada")>=0 && victory.position==1,"server local victory ends playback with packet cursor preserved");
+-    f=fixture(display,[walk(100,0),["hole",100]],true);f.bot.advance(0);f.bot.advance(300);check(f.calls.length==1 && !NativeMotion.isSynthetic(f.root),"shared Follow mechanism works on sealed document root");
+-    MainTimeline.instance=display as MainTimeline;var old:Statements=new Statements();old.current_timeout=-1;old.play_map();old.play_sequence();old.step(null,"walk");old.player_victory();old.player_death();old.kill_player();old.send_cheese_packet();old.send_hole_packet();old.send_mort_packet();old.move_player(1,2);old.handle_preview_btn();check(old.current_timeout==-1 && old.new_cheese_packet(1,true)==null && old.new_victory_packet(0,1,0,1,1)==null,"retired legacy execution and forced packet functions stay inert");RoutePlayer.attach(display);check(true,"old RoutePlayer entry remains inert");
+-    var restRoute:Array=[];for(var n:int=0;n<100;n++){var w:Array=walk(395+n*35,n==0 ? 0 : 100,false);w[0].vy=0;restRoute.push(w);}restRoute.push(["hole",10000]);f=fixture(display,restRoute);f.root.Keys.is_jumping="jumpActive";f.player.jumpActive=false;f.bot.setTiming(new RouteTiming(123));var original:String=com.adobe.serialization.json.JSON.encode(restRoute);var rests:int=0;var wasRest:Boolean=false;for(var now:int=0;now<12000;now+=8){f.bot.advance(now);var resting:Boolean=f.bot.message.indexOf("microparada")>=0;if(resting && !wasRest){rests++;check(!f.player.left && !f.player.right,"microrest releases native movement without freezing socket");}wasRest=resting;}check(rests>=2 && f.bot.message.indexOf("100/101")>=0,"microrests retain all 100 recorded movement states with new shared Follow engine");check(f.body.velocity.vx==0 && f.body.velocity.vy==0 && com.adobe.serialization.json.JSON.encode(restRoute)==original,"microrest playback preserves native velocity and original JSON");
+-    f=fixture(display,[walk(100,0,false),["hole",20]]);for(n=0;n<120;n++){var base:int=n*1000;f.player.dead=true;f.bot.advance(base);f.player.dead=false;f.bot.advance(base+100);f.bot.advance(base+400);f.bot.advance(base+420);}check(f.calls.length==120 && f.syncs.length==120 && f.markers.length==0,"120 simulated respawns use only new controller and one initial sync per attempt");
+-    var loader:URLLoader=new URLLoader();loader.addEventListener(IOErrorEvent.IO_ERROR,function(e:IOErrorEvent):void{ExternalInterface.call("recordTest","FAIL: full route library could not load");});
+-    loader.addEventListener(Event.COMPLETE,function(e:Event):void{
+-     var catalog:RouteLibrary=new RouteLibrary(String(loader.data));loader.data="";var codes:Array=[];var cursor:int=0;var totalSteps:int=0;
+-     var batch:Function=function():void{try{
+-      if(!catalog.done){catalog.step(131072);if(catalog.done){for(var name:String in catalog.entries)codes.push(name);ExternalInterface.call("recordProgress","Indexed "+codes.length+" map entries");}}
+-      else {var limit:int=Math.min(codes.length,cursor+4);while(cursor<limit){var route:Array=RoutePlayerNative.decodeRoute(String(catalog.entries[codes[cursor]]));totalSteps+=route.length;cursor++;if(cursor%200==0)ExternalInterface.call("recordProgress","Validated "+cursor+" routes");}}
+-      if(catalog.done && cursor==codes.length){check(cursor==2359,"all 2359 maps parsed incrementally with native ActionScript decoder");verifyLoader(display,function():void{ExternalInterface.call("recordTest","PASS: "+count+" native Robot checks; "+cursor+" routes / "+totalSteps+" steps validated");});}else setTimeout(batch,1);
+-     }catch(error:Error){ExternalInterface.call("recordTest","FAIL: full library "+error.message+" #"+error.errorID);}};batch();
+-    });loader.load(new URLRequest("public/rotas_decodificadas.json"));
+-
+-   }catch(error:Error){ExternalInterface.call("recordTest","FAIL: "+error.message+" #"+error.errorID);}
+-  }
++   root.Keys={player:"mouse",player_physics:"body",player_clip:"clip",is_dead:"dead",player_moving_left:"left",player_moving_right:"right",jump:"jump",is_down:"down",crouch:"crouch",crouch2:"stand",static_side:"side",physics_state:"velocity",physics_state_vx:"vx",physics_state_vy:"vy",bot_set_position:"setPosition",b2vec2:"Point",app_domain:{applicationDomain:{getDefinition:function(n:String):Class{return Point;}}},map_class:{current:map,width:800},map_instance:"current",bot_map_code_object:"number",bot_map_code_value:"value",obj_container:"container",bot_reverse:"mirror",bot_map_width:"width",move_class:{free:true},move_free:"free",timer_class:{locked:false},timer_prop:"locked",packet_handler_class:{receive:function(bytes:ByteArray):void{syncs++;}},packet_handler:"receive"};
++   root.tfm={mouse:player};root.Interface={status_field:new TextField()};root.auto_play=true;
++   root.stage.addEventListener(KeyboardEvent.KEY_DOWN,function(e:KeyboardEvent):void{if(NativeMotion.isSynthetic(root))keys.push({code:e.keyCode,down:true});});
++   root.stage.addEventListener(KeyboardEvent.KEY_UP,function(e:KeyboardEvent):void{if(NativeMotion.isSynthetic(root))keys.push({code:e.keyCode,down:false});});
++   var route:Array=[walk(100,false,true,false,0),walk(200,true,false,true,0),walk(300,false,false,false,10),["hole",100]];
++   var before:String=com.adobe.serialization.json.JSON.encode(route);
++   var bot:RoutePlayerNative=new RoutePlayerNative(root);bot.setRoutes({"@123":route});bot.setTiming(new RouteTiming(1,false));
++   bot.advance(0);bot.advance(249);check(keys.length==0,"original startup wait is preserved");
++   bot.advance(300);check(player.right && !player.left,"first recorded step emits RIGHT");check(bot.message.indexOf("1/4")>=0,"first step advances exactly one index");
++   check(writes==0 && syncs==1,"Robot initial sync is preserved once while route samples never reposition");
++   bot.advance(301);bot.advance(316);bot.advance(332);check(player.right && !player.left && bot.message.indexOf("1/4")>=0,"33ms gate cannot skip or prematurely consume the next step");
++   bot.advance(333);check(player.left && !player.right,"second recorded step emits LEFT");check(bot.message.indexOf("2/4")>=0,"second step advances exactly one index");
++   var jumpDowns:int=0;for each(var key:Object in keys)if(key.code==38 && key.down)jumpDowns++;check(jumpDowns==1,"second step preserves the recorded jump edge");
++   bot.advance(343);bot.advance(365);check(bot.message.indexOf("2/4")>=0,"next step remains pending until minimum interval expires");
++   bot.advance(366);check(!player.left && !player.right,"third recorded neutral step is processed rather than skipped");check(bot.message.indexOf("3/4")>=0,"third step advances exactly one index");
++   var jumpUps:int=0;for each(key in keys)if(key.code==38 && !key.down)jumpUps++;check(jumpUps==1,"third step preserves the recorded jump release");
++   check(player.x==30 && player.y==330.6 && writes==0,"recorded x/y targets never snap the actual player or body");
++   check(body.velocity.vx==7 && body.velocity.vy==-3,"route never overwrites native VX or VY");check(syncs==1,"only the original initial sync was retained; route samples add no syncs");
++   bot.advance(465);check(bot.message.indexOf("3/4")>=0,"terminal delay is preserved after pacing");bot.advance(466);check(bot.message.indexOf("confirmacao")>=0,"terminal marker waits for native hole confirmation");
++   bot.advance(10000);check(player.x==30 && writes==0 && syncs==1,"terminal wait cannot teleport to finish or jump ahead");
++   check(com.adobe.serialization.json.JSON.encode(route)==before,"original route JSON remains unchanged");
++   root.auto_play=false;bot.advance(10001);check(!player.left && !player.right,"disable releases keys immediately");
++   root.auto_play=true;bot.advance(11000);bot.advance(11300);check(player.right && writes==0 && syncs==2,"reactivation replays first step without teleport");
++   player.dead=true;bot.advance(11301);check(!player.right,"death releases held keys");player.dead=false;bot.advance(11400);bot.advance(11650);check(player.right && writes==0 && syncs==3,"respawn restarts without a teleport correction");
++   root.auto_play=false;bot.advance(11651);
++   ExternalInterface.call("recordTest","PASS: "+count+" original-33ms route-step-only removal checks");
++  }catch(error:Error){ExternalInterface.call("recordTest","FAIL: "+error.message+" #"+error.errorID);}}
+  }
+ }
+-
+-class SealedRobotRoot extends flash.display.MovieClip {
+- public var Keys:Object;public var tfm:Object;public var Interface:Object;public var Statements:Object;
+- public var auto_play:Boolean=false;public var auto_play_disable_on_move:Boolean=false;public var host_url:String="";
+- public var current_map_code:String="";public var current_map_code_int:int=0;public var player_has_cheese:Boolean=false;
+-}
+--- a/fontes-robot/RoutePlayerNative.as
++++ b/fontes-robot/RoutePlayerNative.as
+@@ -178,7 +178,7 @@
+     // Horizontal microadjustment while moving; no random sleeps or extra packets.
+     var eligible:Boolean=!p.jump && p.vy==0 && p.mr!=p.ml && p.vx!=0;
+     p.x+=timing.coordinateX(eligible);
+-    motion.followSample(this,p.ml,p.mr,p.jump,p.x,p.y);lastState=p;hasSample=true;
++    motion.movement(this,p.ml,p.mr,p.jump);lastState=p;hasSample=true;
+    }else if(action=="crouch" || action=="duck")motion.crouch(this,Number(step[0])!=0);
+    else if(action=="cheese"){
+     if(managed){
+--- a/fontes-robot/VerifyRobot.java
++++ b/fontes-robot/VerifyRobot.java
+@@ -18,7 +18,7 @@
+   int driver=b.findClassByName("disney.NativeMotion");boolean shared=false;
+   for(var t:b.instance_info.get(driver).instance_traits.traits)if(t instanceof com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter){String n=b.constants.getString(b.constants.getMultiname(t.name_index).name_index);if(n.equals("replay"))throw new Exception("Obsolete velocity replay still present");if(n.equals("followSample")){var code=b.findBody(((com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter)t).method_info).getCode();var calls=new ArrayList<String>();for(var op:code.code)if(op.definition.instructionCode==0x4f)calls.add(b.constants.getString(b.constants.getMultiname(op.operands[0]).name_index)+":"+op.operands[1]);if(!calls.equals(List.of("movement:4","place:3")))throw new Exception("Shared Follow path changed: "+calls);shared=true;}}
+   if(!shared)throw new Exception("Shared Follow driver missing");
+-  for(String[] target:new String[][]{{"disney.FollowControllerV13Shared","update"},{"disney.RoutePlayerNative","apply"}}){boolean hooked=false;int ci=b.findClassByName(target[0]);for(var t:b.instance_info.get(ci).instance_traits.traits)if(t instanceof com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter && target[1].equals(b.constants.getString(b.constants.getMultiname(t.name_index).name_index))){var body=b.findBody(((com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter)t).method_info);for(var op:body.getCode().code)if(op.definition.instructionCode==0x4f && "followSample".equals(b.constants.getString(b.constants.getMultiname(op.operands[0]).name_index)))hooked=true;}if(!hooked)throw new Exception("Follow/Robot not connected to shared driver: "+Arrays.toString(target));}
++  for(String[] target:new String[][]{{"disney.FollowControllerV13Shared","update","followSample"},{"disney.RoutePlayerNative","apply","movement"}}){boolean hooked=false;int ci=b.findClassByName(target[0]);for(var t:b.instance_info.get(ci).instance_traits.traits)if(t instanceof com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter && target[1].equals(b.constants.getString(b.constants.getMultiname(t.name_index).name_index))){var body=b.findBody(((com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter)t).method_info);for(var op:body.getCode().code)if(op.definition.instructionCode==0x4f && target[2].equals(b.constants.getString(b.constants.getMultiname(op.operands[0]).name_index)))hooked=true;}if(!hooked)throw new Exception("Follow/Robot not connected to shared driver: "+Arrays.toString(target));}
+   int rp=b.findClassByName("disney.RoutePlayerNative");for(var t:b.instance_info.get(rp).instance_traits.traits)if("followFrame".equals(b.constants.getString(b.constants.getMultiname(t.name_index).name_index)))throw new Exception("Interpolation function remains");
+   Set<String> flags=Set.of("no_delay","insta_death","insta_death2","insta_win");
+   for(var t:b.instance_info.get(main).instance_traits.traits)if(t instanceof com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter){String n=b.constants.getString(b.constants.getMultiname(t.name_index).name_index);if(!Set.of("loop_game","handle_packet").contains(n))continue;var body=b.findBody(((com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter)t).method_info);for(int i=0;i<body.getCode().code.size();i++){var op=body.getCode().code.get(i);if(op.definition.instructionCode==0x66){String p=b.constants.getString(b.constants.getMultiname(op.operands[0]).name_index);if(p!=null&&flags.contains(p))throw new Exception("Legacy flag still read: "+p);if("play_map".equals(p)&&i+1<body.getCode().code.size()){var next=body.getCode().code.get(i+1);if(next.definition.instructionCode==0x4f&&"addEventListener".equals(b.constants.getString(b.constants.getMultiname(next.operands[0]).name_index)))throw new Exception("Old playback listener still registered");}}}}
+--- a/fontes-robot/build.py
++++ b/fontes-robot/build.py
+@@ -1,4 +1,4 @@
+-"""Rebuild production SWF + two test fixtures with Java 21 and FFDec 26.4.0."""
++"""Rebuild production SWF + eight test fixtures with Java 21 and FFDec 26.4.0."""
+ import argparse,os,pathlib,shutil,subprocess,tempfile
+ HERE=pathlib.Path(__file__).resolve().parent
+ ROOT=HERE.parent
+@@ -40,6 +40,7 @@
+         java(builder,compiled,ROOT/'fontes-fly/FlyTests.as',args.fixtures/'FlyTests.swf')
+         java(builder,compiled,ROOT/'fontes-followautobest/AutoBestTests.as',args.fixtures/'AutoBestTests.swf')
+         java(builder,compiled,ROOT/'fontes-interface/InterfaceTests.as',args.fixtures/'InterfaceTests.swf')
++        java(builder,compiled,ROOT/'fontes-interface/PerformanceTests.as',args.fixtures/'PerformanceTests.swf')
+         java(builder,compiled,ROOT/'fontes-interface/MusicTests.as',args.fixtures/'MusicTests.swf')
+         args.output.parent.mkdir(parents=True,exist_ok=True)
+         shutil.copyfile(compiled,args.output)
+--- a/fontes-robot/run_tests.cjs
++++ b/fontes-robot/run_tests.cjs
+@@ -9,13 +9,13 @@
+ const server=http.createServer((req,res)=>{
+  const route=new URL(req.url,'http://localhost').pathname;
+  if(route==='/'){
+-  res.setHeader('Content-Type','text/html');res.end(`<body><script>window.recordTest=x=>window.result=x;window.routeRequests=()=>performance.getEntriesByType('resource').filter(x=>x.name.includes('/public/rotas/')&&x.name.endsWith('.json')).length;window.recordProgress=x=>console.log(x);window.RufflePlayer={config:{autoplay:'on',unmuteOverlay:'hidden'}};</script><script src="/ruffle/ruffle.js"></script><script>addEventListener('load',()=>{const player=RufflePlayer.newest().createPlayer();document.body.append(player);player.ruffle().load({url:new URLSearchParams(location.search).get('case')==='music'?'/MusicTests.swf':new URLSearchParams(location.search).get('case')==='interface'?'/InterfaceTests.swf':new URLSearchParams(location.search).get('case')==='best'?'/AutoBestTests.swf':new URLSearchParams(location.search).get('case')==='fly'?'/FlyTests.swf':new URLSearchParams(location.search).get('case')==='visual'?'/VisualTests.swf':new URLSearchParams(location.search).get('case')==='follow'?'/FollowRegression.swf':'/RobotTests.swf',allowScriptAccess:true});});</script>`);return;
++  res.setHeader('Content-Type','text/html');res.end(`<body><script>window.recordTest=x=>window.result=x;window.routeRequests=()=>performance.getEntriesByType('resource').filter(x=>x.name.includes('/public/rotas/')&&x.name.endsWith('.json')).length;window.recordProgress=x=>console.log(x);window.RufflePlayer={config:{autoplay:'on',unmuteOverlay:'hidden'}};</script><script src="/ruffle/ruffle.js"></script><script>addEventListener('load',()=>{const player=RufflePlayer.newest().createPlayer();document.body.append(player);player.ruffle().load({url:new URLSearchParams(location.search).get('case')==='performance'?'/PerformanceTests.swf':new URLSearchParams(location.search).get('case')==='music'?'/MusicTests.swf':new URLSearchParams(location.search).get('case')==='interface'?'/InterfaceTests.swf':new URLSearchParams(location.search).get('case')==='best'?'/AutoBestTests.swf':new URLSearchParams(location.search).get('case')==='fly'?'/FlyTests.swf':new URLSearchParams(location.search).get('case')==='visual'?'/VisualTests.swf':new URLSearchParams(location.search).get('case')==='follow'?'/FollowRegression.swf':'/RobotTests.swf',allowScriptAccess:true});});</script>`);return;
+  }
+  if(route==='/music'||route.startsWith('/music/audio/')){if(!process.env.MUSIC_API_BASE){res.writeHead(503).end();return;}const upstream=http.request(new URL(req.url,process.env.MUSIC_API_BASE),{method:req.method,headers:req.headers},response=>{res.writeHead(response.statusCode,response.headers);response.pipe(res);});upstream.on('error',()=>{res.writeHead(502).end();});req.pipe(upstream);return;}
+  let file;
+  if(route==='/public/rotas_decodificadas.json')file=library;
+  else if(/^\/public\/rotas\/[0-9]+\.json$/.test(route))file=path.join(root,'DisneyClient',route);
+- else if(route==='/RobotTests.swf'||route==='/FollowRegression.swf'||route==='/VisualTests.swf'||route==='/FlyTests.swf'||route==='/AutoBestTests.swf'||route==='/InterfaceTests.swf'||route==='/MusicTests.swf')file=path.join(fixtures,path.basename(route));
++ else if(route==='/RobotTests.swf'||route==='/FollowRegression.swf'||route==='/VisualTests.swf'||route==='/FlyTests.swf'||route==='/AutoBestTests.swf'||route==='/InterfaceTests.swf'||route==='/PerformanceTests.swf'||route==='/MusicTests.swf')file=path.join(fixtures,path.basename(route));
+  else if(route.startsWith('/ruffle/')){
+   const base=path.resolve(ruffle);file=path.resolve(base,route.slice('/ruffle/'.length));
+   if(!file.startsWith(base+path.sep)){res.writeHead(403).end();return;}
+@@ -28,7 +28,7 @@
+  try{
+   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+   browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',headless:true,args:['--no-sandbox','--disable-dev-shm-usage','--autoplay-policy=no-user-gesture-required']});
+-  for(const target of (process.env.TEST_CASE ? [process.env.TEST_CASE] : ['robot','follow','visual','fly','best','interface',...(process.env.MUSIC_API_BASE?['music']:[])])){
++  for(const target of (process.env.TEST_CASE ? [process.env.TEST_CASE] : ['robot','follow','visual','fly','best','interface','performance',...(process.env.MUSIC_API_BASE?['music']:[])])){
+    const page=await browser.newPage();page.on('console',m=>{if(m.text().startsWith('Indexed')||m.text().startsWith('Validated'))console.log(m.text());});
+    await page.goto('http://127.0.0.1:'+server.address().port+'/?case='+target);
+    await page.waitForFunction(()=>window.result,null,{timeout:600000});
