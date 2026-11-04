@@ -1,0 +1,48 @@
+{
+  "route_library_sha256": "ef2b8fadf68ff02a3d02939215ba885c0873cc2b75666fcf0afada072a4daf42",
+  "maps": 2359,
+  "counts": {
+    "source_steps": 179813,
+    "walks": 174594,
+    "walks_with_positive_delay_below_33ms": 19203,
+    "walks_with_zero_delay": 6824,
+    "horizontal_flag_changes": 99462,
+    "flag_opposes_current_velocity": 26618
+  },
+  "gravity_from_consistent_ballistic_pairs_m_s2": {
+    "samples": 68080,
+    "p10": 8.26666666666667,
+    "median": 9.999999999999995,
+    "p90": 11.235955056179781
+  },
+  "distance_over_velocity_times_recorded_seconds": {
+    "samples": 11283,
+    "p10": 0.8512386990724433,
+    "median": 0.9903032803796161,
+    "p90": 1.1037527593818985
+  },
+  "historical_33ms_padding_ms": {
+    "median": 153,
+    "p95": 571,
+    "maximum": [
+      2839,
+      "@6641104"
+    ],
+    "map_298424": 522,
+    "interpretation": "theoretical extra time from minimum walk spacing, excluding rendering/network effects"
+  },
+  "map_298424": {
+    "first_six_source_deadlines_ms": [
+      2006,
+      2006,
+      2243,
+      2458,
+      2535,
+      3236
+    ],
+    "sixth_segment_recorded_ms": 701,
+    "wrong_endpoint_average_conversion_ms": 1781.0218978102193,
+    "reason_not_to_use_endpoint_average": "collision/impulse endpoint speed does not represent cruise velocity"
+  },
+  "limits": "Recorded remote-state packets are not a complete input log; geometry, collisions, wind, gravity modifiers and network jitter are not fully invertible."
+}
