@@ -1,0 +1,309 @@
+--- a/fontes-autoplay/RoutePlayer.as
++++ b/fontes-autoplay/RoutePlayer.as
+@@ -116,7 +116,7 @@
+
+    }
+    if(!running){status("Robot: rota finalizada | "+code+" | aguardando proximo mapa");return;}
+-   feedback.observe(player,body,k,now);
++   feedback.observe(player,body,k,now,lastControl);
+    var count:int=0;
+    while(running && count<256){
+     var step:Array=sequence[index];
+@@ -131,7 +131,7 @@
+   }
+   private function drive():void{
+    if(!commandState)return;
+-   var control:Object=feedback.controls(commandState);
++   var control:Object=feedback.controls(commandState,lastState);
+    motion.movement(this,control.left,control.right,control.jump);lastControl=control;
+   }
+   public static function decodeMovement(p:Object):Object{
+@@ -149,7 +149,6 @@
+     // The stored delay never schedules or blocks native input.
+     if(!commandState || commandState.ml!=p.ml || commandState.mr!=p.mr || commandState.jump!=p.jump)feedback.changeInputs();
+     commandState=p;
+-    if(lastControl.jump!=p.jump){motion.movement(this,lastControl.left,lastControl.right,p.jump);lastControl.jump=p.jump;}
+     var since:Number=feedback.since();
+     if(!feedback.checkpoint(p,since,lastState)){
+      var observed:Object=feedback.state();
+@@ -157,6 +156,8 @@
+      return false;
+     }
+     feedback.crossedAt(feedback.hitAt);lastState=p;
++    // Commit the sampled input only after the corresponding position is visited.
++    motion.movement(this,p.ml,p.mr,p.jump);lastControl={left:p.ml,right:p.mr,jump:p.jump};
+    }else if(action=="crouch" || action=="duck")motion.crouch(this,Number(step[0])!=0);
+    // Cheese remains a passive marker; the native game collects it.
+    else if(action=="cheese"){}
+--- a/fontes-robot/RoutePlayerNative.as
++++ b/fontes-robot/RoutePlayerNative.as
+@@ -116,7 +116,7 @@
+
+    }
+    if(!running){status("Robot: rota finalizada | "+code+" | aguardando proximo mapa");return;}
+-   feedback.observe(player,body,k,now);
++   feedback.observe(player,body,k,now,lastControl);
+    var count:int=0;
+    while(running && count<256){
+     var step:Array=sequence[index];
+@@ -131,7 +131,7 @@
+   }
+   private function drive():void{
+    if(!commandState)return;
+-   var control:Object=feedback.controls(commandState);
++   var control:Object=feedback.controls(commandState,lastState);
+    motion.movement(this,control.left,control.right,control.jump);lastControl=control;
+   }
+   public static function decodeMovement(p:Object):Object{
+@@ -149,7 +149,6 @@
+     // The stored delay never schedules or blocks native input.
+     if(!commandState || commandState.ml!=p.ml || commandState.mr!=p.mr || commandState.jump!=p.jump)feedback.changeInputs();
+     commandState=p;
+-    if(lastControl.jump!=p.jump){motion.movement(this,lastControl.left,lastControl.right,p.jump);lastControl.jump=p.jump;}
+     var since:Number=feedback.since();
+     if(!feedback.checkpoint(p,since,lastState)){
+      var observed:Object=feedback.state();
+@@ -157,6 +156,8 @@
+      return false;
+     }
+     feedback.crossedAt(feedback.hitAt);lastState=p;
++    // Commit the sampled input only after the corresponding position is visited.
++    motion.movement(this,p.ml,p.mr,p.jump);lastControl={left:p.ml,right:p.mr,jump:p.jump};
+    }else if(action=="crouch" || action=="duck")motion.crouch(this,Number(step[0])!=0);
+    // Cheese remains a passive marker; the native game collects it.
+    else if(action=="cheese"){}
+--- a/fontes-robot/RouteFeedback.as
++++ b/fontes-robot/RouteFeedback.as
+@@ -10,9 +10,13 @@
+   private var current:Object;
+   private var correction:int=0;
+   private var boundary:Number=-1;
++  private var frameSeconds:Number=1/60;
++  private var braking:Number=12;
++  private var gravity:Number=10;
++  private var jumpStarted:Boolean=false;
+   public var source:String="aguardando";
+
+-  public function reset():void {history=[];current=null;correction=0;boundary=-1;hitAt=NaN;source="aguardando";}
++  public function reset():void {history=[];current=null;correction=0;boundary=-1;hitAt=NaN;source="aguardando";frameSeconds=1/60;braking=12;gravity=10;jumpStarted=false;}
+   private function read(o:Object,key:*):* {
+    try {if(o && key!=null && key in o)return o[key];}catch(ignored:Error){}
+    return null;
+@@ -21,7 +25,7 @@
+    var v:* = read(o,a);if(v==null)v=read(o,b);
+    return v is Number && isFinite(Number(v)) ? Number(v) : NaN;
+   }
+-  public function observe(player:Object,body:Object,k:Object,now:Number):Object {
++  public function observe(player:Object,body:Object,k:Object,now:Number,inputs:Object=null):Object {
+    var x:Number=Number(player.x);var y:Number=Number(player.y);
+    try {
+     var transform:Function=read(body,k.get_x_form) as Function;
+@@ -46,6 +50,19 @@
+      vx=(x-current.x)/(30*seconds);vy=(y-current.y)/(30*seconds);
+     }else{vx=0;vy=0;source="aguardando";}
+    }
++   if(current && now>current.time && now-current.time<=100){
++    var dt:Number=(now-current.time)/1000;
++    frameSeconds=0.75*frameSeconds+0.25*dt;
++    var observedGravity:Number=(vy-current.vy)/dt;
++    if(source=="nativa" && Math.abs(current.vy)>0.7 && Math.abs(vy)>0.7 && observedGravity>=2 && observedGravity<=25)
++     gravity=0.85*gravity+0.15*observedGravity;
++    if(source=="nativa" && inputs && Math.abs(current.vx)>0.5 &&
++       ((current.vx>0 && inputs.left && !inputs.right) || (current.vx<0 && inputs.right && !inputs.left))){
++     var deceleration:Number=(Math.abs(current.vx)-Math.abs(vx))/dt;
++     // Ignore impacts, bounces and ambiguous external impulses.
++     if(current.vx*vx>0 && deceleration>=2 && deceleration<=40)braking=0.8*braking+0.2*deceleration;
++    }
++   }
+    current={x:x,y:y,vx:vx,vy:vy,time:now,phase:vy < -0.35 ? "subindo" : (vy > 0.35 ? "caindo" : "apoio")};history.push(current);
+    while(history.length>512)history.shift();
+    return current;
+@@ -54,6 +71,10 @@
+   // Circle entry plus forward progress along the incoming route segment.
+   // Returns the earliest actual visit, not the timestamp of the recorded step.
+   private function entry(a:Object,b:Object,target:Object,previous:Object,since:Number):Number {
++   // The same coordinate can occur on ascent and descent. Do not consume a
++   // future landing checkpoint during the outward half of the jump.
++   if(Number(target.vy)<-0.7 && Number(a.vy)>0.7 && Number(b.vy)>0.7)return NaN;
++   if(Number(target.vy)>0.7 && Number(a.vy)<-0.7 && Number(b.vy)<-0.7)return NaN;
+    var elapsed:Number=b.time-a.time;
+    var lo:Number=elapsed>0 ? Math.max(0,(since-a.time)/elapsed) : 0;
+    var hi:Number=1;
+@@ -106,31 +127,63 @@
+    return false;
+   }
+   public function crossedAt(now:Number):void {boundary=Math.max(boundary,now);}
+-  public function changeInputs():void {correction=0;}
++  public function changeInputs():void {correction=0;jumpStarted=false;}
+   public function since():Number {return boundary;}
+
+-  // Position and VX are read from the live body; all output is native input.
+-  // No recorded timing, interpolation curve, recovery timer or future-VY gate.
+-  public function controls(target:Object):Object {
++  // Samples describe the state AT a waypoint. Keep the incoming command
++  // until arrival; do not apply a future reversal at the previous waypoint.
++  public function controls(target:Object,previous:Object=null):Object {
+    if(!target || !current)return {left:false,right:false,jump:false};
+-   var l:Boolean=Boolean(target.ml);var r:Boolean=Boolean(target.mr);
+-   var jump:Boolean=Boolean(target.jump);
+-   var positionError:Number=target.x-current.x;
+-   var magnitude:Number=Math.abs(Number(target.vx));
+-   // An after-collision velocity pointing backwards must not pull the mouse
+-   // away from a still-unvisited target. It supplies speed magnitude only.
+-   var wantedVX:Number=Number(target.vx);
+-   if(positionError>0.5)wantedVX=magnitude;
+-   else if(positionError < -0.5)wantedVX=-magnitude;
+-   else if(l!=r)wantedVX=l ? -magnitude : magnitude;
+-   var velocityError:Number=wantedVX-current.vx;
+-   var effort:Number=0.045*positionError+0.8*velocityError;
++   var incoming:Object=previous ? previous : target;
++   var l:Boolean=Boolean(incoming.ml);var r:Boolean=Boolean(incoming.mr);
++   var jump:Boolean=Boolean(incoming.jump);
++   var dx:Number=target.x-current.x;
++   var direction:Number=dx<0 ? -1 : 1;
++   var desired:Number=Math.abs(Number(target.vx));
++   if(previous){
++    var span:Number=Math.abs(target.x-previous.x);
++    var progress:Number=span>0.5 ? Math.max(0,Math.min(1,1-Math.abs(dx)/span)) : 1;
++    desired=Math.abs(Number(previous.vx))*(1-progress)+desired*progress;
++    // A resting departure snapshot is not a command to stay at rest.
++    if(desired<0.35 && Math.abs(dx)>2 && (l!=r || target.ml!=target.mr))desired=3.45;
++   }
++   var wantedVX:Number=desired*direction;
++   if(Math.abs(dx)<=0.5)wantedVX=l!=r ? (l ? -desired : desired) : Number(target.vx);
++   // Limit the approach speed when the recording actually stops here.
++   // v^2 = v_end^2 + 2*a*distance, with units converted from pixels to metres.
++   if(previous && Math.abs(Number(target.vx))<0.35 && !target.ml && !target.mr){
++    var stopping:Number=Math.sqrt(Number(target.vx)*Number(target.vx)+2*braking*Math.max(0,Math.abs(dx)-1)/30);
++    wantedVX=direction*Math.min(Math.abs(wantedVX),stopping);
++   }
++   // Predict one measured frame ahead to brake before overshooting.
++   var horizon:Number=Math.max(0.008,Math.min(0.05,frameSeconds));
++   var predictedError:Number=dx-(current.vx-wantedVX)*30*horizon;
++   var effort:Number=0.045*predictedError+0.8*(wantedVX-current.vx);
+    if(Math.abs(effort)>=0.8)correction=effort<0 ? -1 : 1;
+    else if(Math.abs(effort)<=0.25)correction=0;
+-   // A small remaining displacement must not stall inside the input deadband.
+-   if(Math.abs(positionError)>0.5 && Math.abs(current.vx)<0.35 && Math.abs(effort)<0.8)correction=positionError<0 ? -1 : 1;
++   if(Math.abs(dx)>0.5 && Math.abs(current.vx)<0.35 && Math.abs(effort)<0.8)correction=direction;
+    if(correction<0){l=true;r=false;}
+    else if(correction>0){l=false;r=true;}
++   if(previous && Boolean(target.jump)!=Boolean(previous.jump)){
++    if(target.jump){
++     // Reconstruct the takeoff from the first rising sample. This allows an
++     // elevated checkpoint without jumping a whole segment too early.
++     var flight:Number=Math.max(0,Math.min(0.5,(Number(target.vy)+5)/gravity));
++     var launchX:Number=target.x-Number(target.vx)*30*flight;
++     var launchY:Number=target.y-30*(-5*flight+0.5*gravity*flight*flight);
++     var travel:Number=target.x-previous.x;
++     var nearLaunch:Boolean=Math.abs(launchX-current.x)<=Math.max(2,Math.abs(current.vx)*30*horizon);
++     var passedLaunch:Boolean=travel>0 ? current.x>=launchX : (travel<0 ? current.x<=launchX : nearLaunch);
++     var grounded:Boolean=Math.abs(current.vy)<0.35;
++     var plausible:Boolean=Number(target.vy)<=-0.35 && Number(target.vy)>=-5.35 && Math.abs(launchY-current.y)<=8;
++     jumpStarted=jumpStarted || (plausible && (nearLaunch || passedLaunch)) ||
++          (grounded && !plausible && target.y<current.y-8 && Math.abs(travel)<2);
++     jump=jumpStarted;
++    }else{
++     // Releasing UP does not force vertical velocity; release at the sample.
++     jump=Boolean(previous.jump);
++    }
++   }
+    return {left:l,right:r,jump:jump};
+   }
+
+--- a/fontes-robot/RobotTests.as
++++ b/fontes-robot/RobotTests.as
+@@ -53,6 +53,31 @@
+    check(completed,"spatial mode completes synthetic path despite one-hour delays in every stored step");
+    check(f.calls.length==0 && f.syncs.length==0,"spatial simulation sends no forced coordinates or initial sync");
+   }
++  private static function simulateRecordedLaunch(display:MovieClip,frame:int):void{
++   var route:Array=[[{"mr":false,"ml":true,"x":1403,"y":1028,"vx":0,"vy":0,"jump":false,"frame":0},"walk",2006],[{"mr":false,"ml":true,"x":1403,"y":1028,"vx":0,"vy":0,"jump":false,"frame":0},"walk",0],[{"mr":false,"ml":true,"x":1343,"y":1028,"vx":65191,"vy":65036,"jump":true,"frame":9},"walk",237],[{"mr":true,"ml":false,"x":1272,"y":947,"vx":65191,"vy":65243,"jump":true,"frame":9},"walk",215],[{"mr":false,"ml":true,"x":1248,"y":926,"vx":65329,"vy":65328,"jump":true,"frame":9},"walk",77],[{"mr":false,"ml":true,"x":1004,"y":1029,"vx":67,"vy":388,"jump":false,"frame":9},"walk",701]];route.push(["hole",0]);
++   var f:Object=fixture(display,route);f.body.velocity.vx=0;
++   var launchedAt:Number=NaN;var floor:Number=f.player.y;
++   f.root.stage.addEventListener(KeyboardEvent.KEY_DOWN,function(e:KeyboardEvent):void{
++    if(e.keyCode==38 && NativeMotion.isSynthetic(f.root) && Math.abs(f.body.velocity.vy)<0.35 && f.player.y>=floor-0.1){f.body.velocity.vy=-5;launchedAt=f.player.x;}
++   });
++   f.bot.advance(0);var complete:Boolean=false;
++   for(var tick:int=frame;tick<=6000;tick+=frame){
++    var dt:Number=frame/1000;var vx:Number=f.body.velocity.vx;
++    if(f.player.left)vx=Math.max(-3.45,vx-12*dt);
++    else if(f.player.right)vx=Math.min(3.45,vx+12*dt);
++    else vx=vx>0 ? Math.max(0,vx-12*dt) : Math.min(0,vx+12*dt);
++    f.body.velocity.vx=vx;f.player.x+=vx*30*dt;
++    f.body.velocity.vy+=10*dt;f.player.y+=f.body.velocity.vy*30*dt;
++    if(f.player.y>=floor){f.player.y=floor;f.body.velocity.vy=0;}
++    var px:Number=f.player.x;var py:Number=f.player.y;f.bot.advance(tick);
++    check(f.player.x==px && f.player.y==py,"recorded-route model is actuated through keys only");
++    if(f.bot.message.indexOf("confirmacao")>=0){complete=true;break;}
++   }
++   check(isFinite(launchedAt) && Math.abs(launchedAt-402.9)<=6,"@298424 launches at recorded location within one simulation frame: "+launchedAt);
++   check(complete,"@298424 first six samples complete under native-key physics at "+frame+"ms: "+f.bot.message+" x="+f.player.x+" y="+f.player.y);
++   check(f.calls.length==0 && f.syncs.length==0,"recorded-route simulation uses no reposition or sync packets");
++   f.root.auto_play=false;f.bot.advance(7000);
++  }
+   public static function run(display:MovieClip):void{
+    try{
+     var f:Object=fixture(display,[walk(100,3600000,false),walk(200,3600000,false),["hole",3600000]]);f.bot.advance(0);
+@@ -99,6 +124,31 @@
+     velocity.xx=0;velocity.yy=0;feedback.observe(readPlayer,readBody,readKeys,64);c=feedback.controls({x:210,y:210,vx:-14.61,vy:0,mr:true,ml:false,jump:false});
+     check(c.right,"after-collision velocity sign cannot reverse spatial approach away from target");
+     c=feedback.controls({x:151,y:210,vx:0,vy:0,mr:false,ml:false,jump:false});check(c.right,"small outstanding displacement is not trapped by the velocity deadband");
++    var presses:int=0;
++    // Incoming state, ballistic launch reconstruction and phase regressions.
++    feedback.reset();readPlayer={x:30,y:330.6};velocity={xx:3.45,yy:0};
++    readBody={getVelocity:function():Object{return velocity;}};
++    var incoming:Object={x:30,y:330.6,vx:3.45,vy:0,ml:false,mr:true,jump:false};
++    var reversal:Object={x:36,y:330.6,vx:3.45,vy:0,ml:true,mr:false,jump:false};
++    feedback.observe(readPlayer,readBody,readKeys,0);
++    c=feedback.controls(reversal,incoming);check(c.right && !c.left,"future braking flag does not reverse the incoming segment before arrival");
++    var takeoff:Object={x:60,y:330.6,vx:3.45,vy:-5,ml:false,mr:true,jump:true};
++    c=feedback.controls(takeoff,incoming);check(!c.jump,"UP waits for the recorded ground takeoff instead of firing a full segment early");
++    readPlayer.x=60;feedback.observe(readPlayer,readBody,readKeys,16);c=feedback.controls(takeoff,incoming);check(c.jump && c.right,"takeoff issues UP together with the existing horizontal input");
++    var rising:Object={x:80.7,y:306.6,vx:3.45,vy:-3,ml:false,mr:true,jump:true};
++    feedback.changeInputs();readPlayer.x=30;feedback.observe(readPlayer,readBody,readKeys,32);c=feedback.controls(rising,incoming);check(!c.jump,"elevated sample reconstructs its takeoff instead of jumping at segment start");
++    readPlayer.x=60;feedback.observe(readPlayer,readBody,readKeys,48);c=feedback.controls(rising,incoming);check(c.jump,"elevated sample triggers at its reconstructed ballistic launch position");
++    feedback.reset();readPlayer={x:0,y:0};velocity={xx:0,yy:-3};feedback.observe(readPlayer,readBody,readKeys,0);
++    readPlayer.y=-10;feedback.observe(readPlayer,readBody,readKeys,100);
++    check(!feedback.checkpoint({x:0,y:-8,vy:3},0),"descending checkpoint cannot be consumed while ascending through the same coordinate");
++    velocity.yy=3;readPlayer.y=-12;feedback.observe(readPlayer,readBody,readKeys,200);readPlayer.y=-8;feedback.observe(readPlayer,readBody,readKeys,300);
++    check(feedback.checkpoint({x:0,y:-8,vy:3},200),"descending checkpoint is accepted on the matching flight phase");
++    var delayedJump:Array=walk(300,100,true);delayedJump[0].vy=65036;
++    f=fixture(display,[walk(100,0,false),delayedJump,["hole",0]]);f.bot.advance(0);
++    presses=0;for each(var eventKey:Object in f.keys)if(eventKey.code==38 && eventKey.down)presses++;
++    check(presses==0 && f.player.right,"executor does not bypass launch calculation with a premature UP event");
++    f.player.x=90;f.bot.advance(16);presses=0;for each(eventKey in f.keys)if(eventKey.code==38 && eventKey.down)presses++;
++    check(presses==1,"executor commits UP once at the actual takeoff waypoint");
+     feedback.reset();readPlayer={x:0,y:0};feedback.observe(readPlayer,{}, {},0);readPlayer.x=6;state=feedback.observe(readPlayer,{}, {},200);
+     check(Math.abs(state.vx-1)<0.00001 && feedback.source=="estimada","missing native getter uses marked position-derived estimate in matching units");
+     feedback.reset();state=feedback.observe(readPlayer,{}, {},500);check(state.vx==0 && feedback.source=="aguardando","player reset discards old estimates");
+@@ -112,7 +162,7 @@
+     feedback.reset();readPlayer.x=0;feedback.observe(readPlayer,{}, {},0);readPlayer.x=200;feedback.observe(readPlayer,{}, {},100);check(!feedback.checkpoint({x:100,y:0},0),"large external reposition is not a fake swept visit");
+
+     var ground:Array=walk(100,3600000,false);ground[0].vx=0;var elevated:Array=walk(100,3600000,true);elevated[0].y=982;elevated[0].vx=0;
+-    f=fixture(display,[ground,elevated,["cheese",3600000],["hole",3600000]]);f.bot.advance(0);var presses:int=0;for each(var key:Object in f.keys)if(key.code==38 && key.down)presses++;
++    f=fixture(display,[ground,elevated,["cheese",3600000],["hole",3600000]]);f.bot.advance(0);presses=0;for each(var key:Object in f.keys)if(key.code==38 && key.down)presses++;
+     check(presses==1 && f.bot.message.indexOf("ponto 2/4")>=0,"spatial target activates jump before requiring its elevated coordinate");f.body.velocity.vy=-5;
+     for(var time:int=16;time<=600;time+=16){f.body.velocity.vy+=10*0.016;f.player.y+=f.body.velocity.vy*30*0.016;var physicalY:Number=f.player.y;f.bot.advance(time);check(f.player.y==physicalY,"native jump model is never repositioned by controller");}
+     check(f.bot.message.indexOf("confirmacao")>=0 && f.markers.length==0,"native jump reaches point and passes cheese/hole markers without recorded delays");
+@@ -123,6 +173,7 @@
+     check(f.bot.message.indexOf("vitoria confirmada")>=0 && victory.position==1,"native local victory and packet cursor remain intact");
+     MainTimeline.instance=display as MainTimeline;var old:Statements=new Statements();old.current_timeout=-1;old.play_map();old.play_sequence();old.step(null,"walk");old.player_victory();old.player_death();old.kill_player();old.send_cheese_packet();old.send_hole_packet();old.send_mort_packet();old.move_player(1,2);old.handle_preview_btn();
+     check(old.current_timeout==-1 && old.new_cheese_packet(1,true)==null,"retired forced movement and packet functions remain inert");
++    simulateRecordedLaunch(display,16);simulateRecordedLaunch(display,33);simulateRecordedLaunch(display,50);
+     simulate(display,0,16);simulate(display,1,16);simulate(display,-0.5,33);
+     var loader:URLLoader=new URLLoader();loader.addEventListener(IOErrorEvent.IO_ERROR,function(e:IOErrorEvent):void{ExternalInterface.call("recordTest","FAIL: full route library could not load");});
+     loader.addEventListener(Event.COMPLETE,function(e:Event):void{
+--- a/fontes-interface/InterfaceTests.as
++++ b/fontes-interface/InterfaceTests.as
+@@ -16,8 +16,8 @@
+    var writer:Object=r.Keys.chat_class2;var queued:int=messages.length;r.Keys.chat_class2=null;LocalServerLog.emit(r,"Evento aguardando o chat");check(messages.length==queued,"logs wait until the native SERVER writer is ready");r.Keys.chat_class2=writer;LocalServerLog.emit(r,"Evento pronto");check(messages.length==queued+2 && String(messages[queued]).indexOf("aguardando")>=0,"queued logs flush in order without network fallback");
+    var ui:Object={menu_ui:null,options_ui:new Sprite(),general_ui:new Sprite(),farm_ui:new Sprite(),bot_ui:new Sprite(),keys_ui:new Sprite(),settings_ui:new Sprite(),last_tab:"general"};r.Interface=ui;ui.general_ui.addChild(field("Jogador"));ui.farm_ui.addChild(field("Farm"));ui.bot_ui.addChild(field("Robot"));ui.keys_ui.addChild(field("Atalhos"));ui.settings_ui.addChild(field("Ajustes"));ui.change_menu_tab=function(id:String):void{ui.last_tab=id;while(ui.options_ui.numChildren)ui.options_ui.removeChildAt(0);ui.options_ui.addChild(ui[id=="general"?"general_ui":id=="farm"?"farm_ui":id=="bot"?"bot_ui":id=="keyboard"?"keys_ui":"settings_ui"]);};
+    MenuShell.attach(r);var panel:Sprite=ui.menu_ui;check(panel!=null && panel.parent!=null,"new menu builds using existing native interface");check(nav(panel,"Follow")!=null,"Follow section appears in navigation");nav(panel,"Follow").dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));check(ui.last_tab=="follow" && find(panel,"astroFollowPlayers")!=null,"Follow opens Players tab inside existing options viewport");var players:FollowPlayersPanel=FollowPlayersPanel.get(r);players.refresh();var list:DisplayObjectContainer=find(panel,"astroPlayerList") as DisplayObjectContainer;check(list!=null && find(list,"astroPlayer_1:Self#0001")!=null && find(list,"astroPlayer_4:Beta#0003")!=null,"room list includes self and dead players");var follow:Sprite=find(panel,"astroFollowSelected") as Sprite;check(!follow.mouseEnabled,"follow button disabled before selection");
+-   find(list,"astroPlayer_1:Self#0001").dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));check(!follow.mouseEnabled,"cannot follow yourself");find(list,"astroPlayer_2:Alpha#0002").dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));check(follow.mouseEnabled,"selecting another player enables Follow");follow.dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));r.stage.dispatchEvent(new Event(Event.ENTER_FRAME));check(nativeJoin==1 && placements>0 && self.x==120,"button invokes existing functional Follow without typing a command");check(String(messages[messages.length-1]).indexOf("Follow ativado: Alpha#0002")>=0,"following selected player emits native SERVER log");find(panel,"astroStopFollow").dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));check(!self.right && String(messages[messages.length-1]).indexOf("Follow desativado")>=0,"Stop releases movement and logs deactivation");
+-   find(list,"astroPlayer_3:*Souris_25").dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));follow.dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));r.stage.dispatchEvent(new Event(Event.ENTER_FRAME));check(self.x==160 && nativeJoin==2,"guest nickname can be selected without inventing a hashtag");FollowControllerV13Shared.stopSelected(r);
++   find(list,"astroPlayer_1:Self#0001").dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));check(!follow.mouseEnabled,"cannot follow yourself");find(list,"astroPlayer_2:Alpha#0002").dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));check(follow.mouseEnabled,"selecting another player enables Follow");follow.dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));r.stage.dispatchEvent(new Event(Event.ENTER_FRAME));check(nativeJoin==0 && placements==0 && self.x==10 && self.y==20 && self.right,"button invokes native-key Follow without typing or teleporting");check(String(messages[messages.length-1]).indexOf("Follow ativado: Alpha#0002")>=0,"following selected player emits native SERVER log");find(panel,"astroStopFollow").dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));check(!self.right && String(messages[messages.length-1]).indexOf("Follow desativado")>=0,"Stop releases movement and logs deactivation");
++   find(list,"astroPlayer_3:*Souris_25").dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));follow.dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));r.stage.dispatchEvent(new Event(Event.ENTER_FRAME));check(self.x==10 && self.y==20 && self.right && placements==0 && nativeJoin==0,"guest selection steers with native keys without teleport or sync packet");FollowControllerV13Shared.stopSelected(r);
+    var search:TextField=find(panel,"astroPlayerSearch") as TextField;search.text="alpha";search.dispatchEvent(new Event(Event.CHANGE));check(find(list,"astroPlayer_2:Alpha#0002")!=null && find(list,"astroPlayer_3:*Souris_25")==null,"search filters room list");search.text="";search.dispatchEvent(new Event(Event.CHANGE));find(list,"astroPlayer_2:Alpha#0002").dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));delete r.tfm.people[2];players.refresh();check(!follow.mouseEnabled && find(list,"astroPlayer_2:Alpha#0002")==null,"departed player removed and selection disabled");check(!FollowControllerV13Shared.selectPlayer(r,other),"stale room object rejected instead of following wrong ID");
+    for(var i:int=5;i<20;i++)r.tfm.people[i]={id:i,nick:"Player"+i+"#0001",x:0,y:0,dead:false};players.refresh();list.dispatchEvent(new MouseEvent(MouseEvent.MOUSE_WHEEL,true,false,0,0,null,false,false,false,false,-3));check(Sprite(list).scrollRect.y>0,"players list scrolls with mouse wheel");var outer:Sprite=ui.options_ui.parent as Sprite;check(outer.scrollRect.y==0,"inner player scrolling does not move outer form");
+    MenuShell.setOpacity(r,0.72);check(Math.abs(panel.alpha-0.72)<0.01 && r.alpha==1,"opacity applies to menu only");MenuShell.setOpacity(r,0);check(Math.abs(panel.alpha-0.65)<0.01,"opacity remains readable and selectable");MenuShell.setOpacity(r,2);check(panel.alpha==1,"opacity maximum is clamped");check(find(panel,"astroOpacityTrack")!=null,"visible opacity control exists");nav(panel,"Jogador").dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));check(ui.last_tab=="general" && ui.options_ui.contains(ui.general_ui),"native tabs remain usable after Players");
