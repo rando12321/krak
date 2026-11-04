@@ -1,0 +1,504 @@
+--- a/fontes-autoplay/RoutePlayer.as
++++ b/fontes-autoplay/RoutePlayer.as
+@@ -3,7 +3,7 @@
+  public class RoutePlayer {
+   private var cheeseConfirmed:Boolean=false;private var cheeseWaitUntil:int=-1;private var cheeseWaitStarted:int=0;private var managed:Boolean=false;private var managedOn:Boolean=false;private var worldSpace:Boolean=false;
+   private static var instances:Dictionary=new Dictionary(true);
+-  private var focused:Boolean=true;private var suspendedAt:int=-1;private var roundToken:String="";private var restartPending:Boolean=false;private var waitingSpawn:Boolean=false;private var restUntil:int=0;private var restAt:int=0;private var lastState:Object;private var timing:RouteTiming;private var synchronized:Boolean=false;
++  private var pendingTarget:Object;private var pendingSince:Number=0;private var feedback:RouteFeedback=new RouteFeedback();private var inputPacer:RouteInputPacer=new RouteInputPacer();private var lastControl:Object={left:false,right:false,jump:false};private var focused:Boolean=true;private var suspendedAt:int=-1;private var roundToken:String="";private var restartPending:Boolean=false;private var waitingSpawn:Boolean=false;private var restUntil:int=0;private var restAt:int=0;private var lastState:Object;private var timing:RouteTiming;private var synchronized:Boolean=false;
+   private var remote:Boolean=true;private var loadingCode:String="";private var failedCode:String="";private var cacheOrder:Array=[];private var root:MovieClip;private var motion:NativeMotion;private var routes:Object;private var loadError:String="";private var loader:URLLoader;
+   private var map:Object;private var player:Object;private var body:Object;private var code:String="";private var aliveBefore:Boolean=false;
+   private var sequence:Array;private var index:int=0;private var due:Number=0;private var lastWalkAt:Number=-1;private var settle:int=0;private var enabled:Boolean=false;private var attempted:Boolean=false;private var running:Boolean=false;private var paused:Boolean=false;
+@@ -43,9 +43,9 @@
+    if(total==0)throw new Error("Empty route dictionary",2503);cancelLoad();remote=false;routes=value;loadError="";
+   }
+   private function status(text:String):void{message=text;var ui:Object=root["Interface"];if(ui && ui["status_field"])ui["status_field"].text=text;}
+-  private function release():void{motion.release(this);}
++  private function release():void{inputPacer.reset();motion.release(this);lastControl={left:false,right:false,jump:false};}
+   public function pause():void{if(!enabled)return;release();running=false;paused=true;pauseMessage="Robot: pausado pela tecla; reative para reiniciar";status(pauseMessage);}
+-  private function reset(now:int):void{cheeseConfirmed=false;cheeseWaitUntil=-1;release();running=false;attempted=false;paused=false;failure="";won=false;entering=false;holeWaitUntil=0;sequence=null;index=0;lastWalkAt=-1;hasSample=false;synchronized=false;timing.reset(now);restUntil=0;lastState=null;waitingSpawn=false;restartPending=false;suspendedAt=-1;retryAt=0;settle=now+250;}
++  private function reset(now:int):void{pendingTarget=null;feedback.reset();cheeseConfirmed=false;cheeseWaitUntil=-1;release();running=false;attempted=false;paused=false;failure="";won=false;entering=false;holeWaitUntil=0;sequence=null;index=0;lastWalkAt=-1;hasSample=false;synchronized=false;timing.reset(now);restUntil=0;lastState=null;waitingSpawn=false;restartPending=false;suspendedAt=-1;retryAt=0;settle=now+250;}
+   public function setFocused(value:Boolean):void{focused=value;if(!value)release();}
+   public function setTiming(policy:RouteTiming):void{timing=policy ? policy : new RouteTiming(1,false);}
+   private function hasMovement(route:Array):Boolean{for each(var step:Array in route){if(step[1]=="hole")return false;if(step[1]=="walk")return true;}return false;}
+@@ -138,10 +138,11 @@
+     var held:Number=Math.max(0,now-restAt);due+=held;restUntil=0;
+     if(lastState)motion.movement(this,lastState.ml,lastState.mr,lastState.jump);
+    }
++   feedback.observe(player,body,k,now,lastControl);
++   if(!pendingTarget && lastState)sendControl({left:lastState.ml,right:lastState.mr,jump:lastState.jump},now);
+    var count:int=0;var walks:int=0;
+    while(running && now>=due && count<256){
+     var step:Array=sequence[index];if(String(step[1])=="walk"){if(walks>=1 || (lastWalkAt>=0 && now-lastWalkAt<33))break;walks++;}
+-    if(now-due>500 && cheeseWaitUntil<0)throw new Error("Janela atrasada; reinicie a rota",2603);
+     if(!apply(step,k,now))return;
+     if(String(step[1])=="walk"){
+      lastWalkAt=now;
+@@ -153,10 +154,6 @@
+     if(entering)break;
+     if(index>=sequence.length){running=false;release();break;}
+     due+=Number(sequence[index][2]);
+-    if(step[1]=="walk"){
+-     var rest:int=timing.restDelay(now,canMicroRest(sequence[index]));
+-     if(rest>0){restAt=now;restUntil=now+rest;motion.movement(this,false,false,false);status("Robot: microparada "+rest+" ms | "+code);return;}
+-    }
+    }
+    if(entering){status("Robot: aguardando confirmacao nativa da toca");return;}
+    status(running ? "Robot: executando "+code+" | "+index+"/"+sequence.length : "Robot: rota finalizada | "+code);
+@@ -167,18 +164,29 @@
+    var b:ByteArray=new ByteArray();b.writeInt(Number(p.x));b.writeInt(Number(p.y));b.writeShort(Number(p.vx));b.writeShort(Number(p.vy));b.position=0;
+    return {x:b.readInt()/100*30,y:b.readInt()/100*30,vx:b.readShort()/100,vy:b.readShort()/100,frame:int(p.frame)<<24>>24,mr:Boolean(p.mr),ml:Boolean(p.ml),jump:Boolean(p.jump)};
+   }
++  private function sendControl(control:Object,now:int):void{
++   if(inputPacer.allow(control,now)){motion.movement(this,control.left,control.right,control.jump);lastControl=control;}
++  }
+   private function apply(step:Array,k:Object,now:int):Boolean{
+    var action:String=String(step[1]);
+    if(action=="walk"){
+-    var p:Object=decodeMovement(step[0]);
+-    if(mirror){p.x=width-p.x;p.vx=-p.vx;var oldRight:Boolean=p.mr;p.mr=p.ml;p.ml=oldRight;}
+-    var dx:Number=p.x-Number(player.x);var dy:Number=p.y-Number(player.y);var error:Number=Math.sqrt(dx*dx+dy*dy);
+-    if(!isFinite(error))throw new Error("Posicao local indisponivel",2601);
+-    if(!hasSample && error>96)return waitForSpawn("inicio da rota distante "+Math.round(error)+"px");
+-    // Horizontal microadjustment while moving; no random sleeps or extra packets.
+-    var eligible:Boolean=!p.jump && p.vy==0 && p.mr!=p.ml && p.vx!=0;
+-    p.x+=timing.coordinateX(eligible);
+-    motion.followSample(this,p.ml,p.mr,p.jump,p.x,p.y);lastState=p;hasSample=true;
++    if(!pendingTarget){
++     var p:Object=decodeMovement(step[0]);
++     if(mirror){p.x=width-p.x;p.vx=-p.vx;var oldRight:Boolean=p.mr;p.mr=p.ml;p.ml=oldRight;}
++     var observed:Object=feedback.state();
++     var dx:Number=p.x-observed.x;var dy:Number=p.y-observed.y;var error:Number=Math.sqrt(dx*dx+dy*dy);
++     if(!isFinite(error))throw new Error("Posicao local indisponivel",2601);
++     if(!hasSample && error>96)return waitForSpawn("inicio da rota distante "+Math.round(error)+"px");
++     pendingTarget=p;pendingSince=now;feedback.changeInputs();
++    }
++    if(!feedback.checkpoint(pendingTarget,Math.max(feedback.since(),pendingSince),lastState)){
++     sendControl(feedback.controls(pendingTarget,lastState),now);
++     var current:Object=feedback.state();
++     status("Robot: aguardando chegada ao ponto "+(index+1)+"/"+sequence.length+" | dx "+Math.round(pendingTarget.x-current.x)+" dy "+Math.round(pendingTarget.y-current.y)+" | "+code);
++     return false;
++    }
++    feedback.crossedAt(feedback.hitAt);lastState=pendingTarget;pendingTarget=null;hasSample=true;
++    sendControl({left:lastState.ml,right:lastState.mr,jump:lastState.jump},now);
+    }else if(action=="crouch" || action=="duck")motion.crouch(this,Number(step[0])!=0);
+    else if(action=="cheese"){
+     if(managed){
+--- a/fontes-followautobest/AutoBestTests.as
++++ b/fontes-followautobest/AutoBestTests.as
+@@ -12,7 +12,7 @@
+    var observed:int=0;NativeMotion.get(r).observeWith(function(bytes:ByteArray):void{observed++;});var best:FollowAutoBest=new FollowAutoBest(r);var opaque:ByteArray=new ByteArray();opaque.writeByte(99);opaque.writeByte(99);opaque.position=0;NativeMotion.observe(r,opaque);check(observed==1,"managed replay does not replace the existing Robot packet observer");var jumpDowns:int=0;r.stage.addEventListener(KeyboardEvent.KEY_DOWN,function(e:KeyboardEvent):void{if(e.keyCode==38)jumpDowns++;});check(!best.enabled,"starts disabled");best.toggle();best.tick(0);check(best.enabled,"toggle enables persistent mode");
+    best.packet(profile("Alpha#0001",50),10);best.packet(profile("Beta#0001",150),10);best.packet(profile("Idle#0001",10000),10);best.packet(profile("Self#0001",99999),10);
+    best.packet(move(10),20);best.packet(move(11),20);best.packet(move(7),20);best.tick(500);check(best.targetName=="beta#0001","highest real firsts among moving nonlocal players; idle high firsts ignored");check(placements==0,"records first without moving local player");
+-   best.packet(move(11,110,100,true),550);best.packet(marker(144,6,10),600);best.packet(marker(8,6,10),650);check(best.phase=="observando","other player's cheese and win do not complete selected route");best.packet(marker(144,6,11),650);best.packet(move(11,120),700);best.packet(marker(8,6,11),800);check(best.phase=="pronto","selected cheese and actual victory complete recording");map.container.reverse=true;r.auto_play=true;best.tick(800);check(best.phase=="pronto" && placements==0,"manual Robot prevents automatic replay from competing for movement");r.auto_play=false;best.tick(800);check(best.phase=="reproduzindo" && !r.auto_play,"managed replay starts without activating legacy/global Robot");check(placements==0,"initial release wait respected");best.tick(1100);check(placements==0 && Math.abs(self.x-30)<0.001,"replay emits native keys without assigning recorded room coordinates");best.tick(1150);check(placements==0 && self.x==30,"recorded 50ms movement input never assigns its target coordinates");check(jumpDowns>0,"recorded jump uses actual native key input");best.tick(1200);best.tick(1250);check(placements==0 && best.message.indexOf("queijo nativo")>=0,"replay waits for actual local cheese instead of assuming recorded marker succeeded");best.packet(marker(144,6,7),1250);best.tick(1250);best.tick(1300);check(placements==0 && self.x==30,"cheese marker does not teleport to the next recorded sample");best.tick(1400);check(best.message.indexOf("confirmacao")>=0,"hole waits for native confirmation");var before:int=placements;best.tick(1500);check(placements==before,"no pose writes while waiting in hole");best.packet(marker(8,6,7),1550);check(best.phase=="aguardando renascer" && best.enabled,"local victory releases replay but leaves mode enabled");best.packet(marker(144,2,99),1600);check(best.phase=="aguardando renascer","other respawn ignored");best.packet(marker(144,2,7),1700);check(best.phase=="observando" && best.enabled,"own respawn starts new search without disabling");
++   best.packet(move(11,110,100,true),550);best.packet(marker(144,6,10),600);best.packet(marker(8,6,10),650);check(best.phase=="observando","other player's cheese and win do not complete selected route");best.packet(marker(144,6,11),650);best.packet(move(11,120),700);best.packet(marker(8,6,11),800);check(best.phase=="pronto","selected cheese and actual victory complete recording");map.container.reverse=true;r.auto_play=true;best.tick(800);check(best.phase=="pronto" && placements==0,"manual Robot prevents automatic replay from competing for movement");r.auto_play=false;best.tick(800);check(best.phase=="reproduzindo" && !r.auto_play,"managed replay starts without activating legacy/global Robot");check(placements==0,"initial release wait respected");best.tick(1100);check(placements==0 && Math.abs(self.x-30)<0.001,"replay emits native keys without assigning recorded room coordinates");self.x=33;best.tick(1150);check(placements==0 && self.x==33,"recorded 50ms movement input never assigns its target coordinates");check(jumpDowns>0,"recorded jump uses actual native key input");best.tick(1200);best.tick(1250);check(placements==0 && best.message.indexOf("queijo nativo")>=0,"replay waits for actual local cheese instead of assuming recorded marker succeeded");best.packet(marker(144,6,7),1250);best.tick(1250);self.x=36;best.tick(1300);check(placements==0 && self.x==36,"cheese marker does not teleport to the next recorded sample");best.tick(1400);check(best.message.indexOf("confirmacao")>=0,"hole waits for native confirmation");var before:int=placements;best.tick(1500);check(placements==before,"no pose writes while waiting in hole");best.packet(marker(8,6,7),1550);check(best.phase=="aguardando renascer" && best.enabled,"local victory releases replay but leaves mode enabled");best.packet(marker(144,2,99),1600);check(best.phase=="aguardando renascer","other respawn ignored");best.packet(marker(144,2,7),1700);check(best.phase=="observando" && best.enabled,"own respawn starts new search without disabling");
+    best.packet(move(10),1800);best.packet(move(11),1800);best.tick(2000);delete r.tfm.players[11];best.tick(2500);check(best.targetName=="alpha#0001" && best.enabled,"leaving target automatically replaced");a.dead=true;best.tick(3000);check(best.targetName=="" && best.enabled,"dead target removed while mode keeps searching");a.dead=false;best.packet(move(10),3100);best.tick(3500);best.packet(marker(8,6,10),3600);check(best.phase=="observando" && best.message.indexOf("parcial")>=0,"partial route without cheese never plays a hole-only shortcut");
+    r.current_round_code=2;best.tick(4000);check(best.targetName=="" && best.enabled,"new round clears old route but keeps command armed");best.toggle();check(!best.enabled && !NativeMotion.get(r).inputBusy(),"second command disables and releases keys");
+    var unknown:Object={id:13,nick:"New#0001",dead:false,clip:true};r.tfm.players={"7":self,"13":unknown};best.toggle();best.tick(5000);best.packet(move(13),5100);best.tick(5500);check(requests.length==1 && requests[0].cipher,"profile requests use native packet and cipher");requests[0].data.position=0;check(requests[0].c==6 && requests[0].cc==26 && requests[0].data.readUTF()=="profile New#0001","profile query format verified");best.tick(6000);check(requests.length==1,"no burst of profile requests while pending");check(best.packet(profile("New#0001",250),6100),"only matching pending profile is consumed to avoid popup");check(!best.packet(profile("Other#0001",500),6200),"unrelated manual profiles continue to native UI");best.tick(6500);check(best.targetName=="new#0001","new active player selected after actual profile response");
+--- a/fontes-robot/PatchRobot.java
++++ b/fontes-robot/PatchRobot.java
+@@ -3,7 +3,7 @@
+  public static void main(String[]args)throws Exception{
+   SWF s=new SWF(new FileInputStream(args[0]),false);DoABC2Tag tag=null;for(Tag t:s.getTags())if(t instanceof DoABC2Tag&&((DoABC2Tag)t).getABC().findClassByName("ChargeurTransformice_fla.MainTimeline")>=0)tag=(DoABC2Tag)t;
+   if(tag==null)throw new Exception("Loader missing");var a=tag.getABC();var idx=s.getAbcIndex();idx.selectAbc(a);
+-  for(String f:List.of("LocalServerLog.as","MusicPlayer.as","SettingsControlsUI.as","PerformanceControlsUI.as","RouteTiming.as","RouteLibrary.as","NativeMotion.as","FlyController.as","FollowControllerV13Shared.as","RoutePlayerNative.as","FollowAutoBest.as","FollowPlayersPanel.as","MenuShell.as","AstroVisual.as","LegacyOptionsRobotGuard.as"))new ActionScript3Parser(idx).addScript(Files.readString(Path.of(args[1],f)),f,a.instance_info.size(),a.script_info.size(),s.getDocumentClass(),a);
++  for(String f:List.of("LocalServerLog.as","MusicPlayer.as","SettingsControlsUI.as","PerformanceControlsUI.as","RouteTiming.as","RouteLibrary.as","NativeMotion.as","RouteFeedback.as","RouteInputPacer.as","FlyController.as","FollowControllerV13Shared.as","RoutePlayerNative.as","FollowAutoBest.as","FollowPlayersPanel.as","MenuShell.as","AstroVisual.as","LegacyOptionsRobotGuard.as"))new ActionScript3Parser(idx).addScript(Files.readString(Path.of(args[1],f)),f,a.instance_info.size(),a.script_info.size(),s.getDocumentClass(),a);
+   Map<Integer,Integer> replacements=new HashMap<>();for(String[] pair:new String[][]{{"disney.MenuBootstrap","disney.MenuShell"},{"disney.WelcomeOnly","disney.LocalServerLog"},{"disney.SettingsControlsV2","disney.SettingsControlsUI"},{"disney.PerformanceControlsV2","disney.PerformanceControlsUI"},{"disney.RgbMarkerButton","disney.AstroVisual"},{"disney.RoutePlayer","disney.RoutePlayerNative"},{"disney.FollowControllerV13","disney.FollowControllerV13Shared"},{"disney.LegacyOptionsV5","disney.LegacyOptionsRobotGuard"}}){int old=a.findClassByName(pair[0]),next=a.findClassByName(pair[1]);if(old<0||next<0)throw new Exception("Required class missing");replacements.put(a.instance_info.get(old).name_index,a.instance_info.get(next).name_index);}
+   int changed=0;int main=a.findClassByName("ChargeurTransformice_fla.MainTimeline");
+   for(var trait:a.instance_info.get(main).instance_traits.traits)if(trait instanceof com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter){String name=a.constants.getString(a.constants.getMultiname(trait.name_index).name_index);if(!List.of("swf_loaded","handle_packet").contains(name))continue;var body=a.findBody(((com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter)trait).method_info);int n=0;for(var op:body.getCode().code)if(op.definition.instructionCode==0x60 && replacements.containsKey(op.operands[0])){op.operands[0]=replacements.get(op.operands[0]);n++;}if(n>0){body.setModified();changed+=n;}}
+--- a/fontes-robot/RobotTests.as
++++ b/fontes-robot/RobotTests.as
+@@ -14,28 +14,61 @@
+    root.tfm={mouse:player};root.Interface={status_field:new TextField()};root.auto_play=true;
+    root.stage.addEventListener(KeyboardEvent.KEY_DOWN,function(e:KeyboardEvent):void{if(NativeMotion.isSynthetic(root))keys.push({code:e.keyCode,down:true});});
+    root.stage.addEventListener(KeyboardEvent.KEY_UP,function(e:KeyboardEvent):void{if(NativeMotion.isSynthetic(root))keys.push({code:e.keyCode,down:false});});
+-   var route:Array=[walk(100,false,true,false,0),walk(200,true,false,true,0),walk(300,false,false,false,10),["hole",100]];
++   var route:Array=[walk(100,false,true,false,0),walk(200,true,false,true,100),walk(300,false,false,false,10),["hole",100]];
+    var before:String=com.adobe.serialization.json.JSON.encode(route);
+    var bot:RoutePlayerNative=new RoutePlayerNative(root);bot.setRoutes({"@123":route});bot.setTiming(new RouteTiming(1,false));
+    bot.advance(0);bot.advance(249);check(keys.length==0,"original startup wait is preserved");
+-   bot.advance(300);check(player.right && !player.left,"first recorded step emits RIGHT");check(bot.message.indexOf("1/4")>=0,"first step advances exactly one index");
+-   check(writes==0 && syncs==0,"Robot startup and first sample never reposition or inject a sync");
+-   bot.advance(301);bot.advance(316);bot.advance(332);check(player.right && !player.left && bot.message.indexOf("1/4")>=0,"33ms gate cannot skip or prematurely consume the next step");
+-   bot.advance(333);check(player.left && !player.right,"second recorded step emits LEFT");check(bot.message.indexOf("2/4")>=0,"second step advances exactly one index");
+-   var jumpDowns:int=0;for each(var key:Object in keys)if(key.code==38 && key.down)jumpDowns++;check(jumpDowns==1,"second step preserves the recorded jump edge");
+-   bot.advance(343);bot.advance(365);check(bot.message.indexOf("2/4")>=0,"next step remains pending until minimum interval expires");
+-   bot.advance(366);check(!player.left && !player.right,"third recorded neutral step is processed rather than skipped");check(bot.message.indexOf("3/4")>=0,"third step advances exactly one index");
+-   var jumpUps:int=0;for each(key in keys)if(key.code==38 && !key.down)jumpUps++;check(jumpUps==1,"third step preserves the recorded jump release");
+-   check(player.x==30 && player.y==330.6 && writes==0,"recorded x/y targets never snap the actual player or body");
+-   check(body.velocity.vx==7 && body.velocity.vy==-3,"route never overwrites native VX or VY");check(syncs==0,"no fake position synchronization packets were injected");
+-   bot.advance(465);check(bot.message.indexOf("3/4")>=0,"terminal delay is preserved after pacing");bot.advance(466);check(bot.message.indexOf("confirmacao")>=0,"terminal marker waits for native hole confirmation");
+-   bot.advance(10000);check(player.x==30 && writes==0 && syncs==0,"terminal wait cannot teleport to finish or jump ahead");
++   bot.advance(300);check(player.right && !player.left,"first reached anchor commits RIGHT");check(bot.message.indexOf("1/4")>=0,"first anchor advances exactly one index");
++   check(writes==0 && syncs==0,"startup never repositions or injects a sync");
++   bot.advance(333);bot.advance(399);check(bot.message.indexOf("1/4")>=0,"next recorded 100ms delay starts at actual anchor arrival");
++   bot.advance(400);check(bot.message.indexOf("aguardando chegada ao ponto 2/4")>=0,"expired timer activates second target but does not consume it");
++   check(player.x==30 && writes==0,"unreached target cannot snap the player to its coordinates");
++   bot.advance(600);bot.advance(1000);bot.advance(2000);check(bot.message.indexOf("aguardando chegada ao ponto 2/4")>=0 && bot.message.indexOf("pausado")<0,"long arrival delay neither skips target nor trips the old 500ms timeout");
++   var jumpDowns:int=0;for each(var key:Object in keys)if(key.code==38 && key.down)jumpDowns++;check(jumpDowns==0,"UP is not committed a full ground segment before the takeoff target");
++   player.x=60;bot.advance(2100);check(bot.message.indexOf("executando @123 | 2/4")>=0,"real arrival advances the second target exactly once");
++   jumpDowns=0;for each(key in keys)if(key.code==38 && key.down)jumpDowns++;check(jumpDowns==1,"arrival commits the recorded jump once");
++   bot.advance(2110);bot.advance(2132);check(bot.message.indexOf("executando @123 | 2/4")>=0,"33ms interval still applies after delayed arrival");
++   bot.advance(2133);check(bot.message.indexOf("aguardando chegada ao ponto 3/4")>=0,"third target stays pending until its physical position is visited");
++   bot.advance(2500);check(bot.message.indexOf("aguardando chegada ao ponto 3/4")>=0,"third target cannot finish merely because original route time expired");
++   player.x=90;bot.advance(2600);check(bot.message.indexOf("executando @123 | 3/4")>=0,"physical third-point arrival advances the index");
++   check(writes==0 && syncs==0 && player.x==90 && player.y==330.6,"all coordinate changes came from test physics, never from Robot");
++   check(body.velocity.vx==7 && body.velocity.vy==-3,"arrival checks do not overwrite native VX or VY");
++   bot.advance(2699);check(bot.message.indexOf("3/4")>=0,"next 100ms timer restarts at arrival 2600, not the old route deadline");
++   bot.advance(2700);check(bot.message.indexOf("confirmacao")>=0,"terminal marker runs only after the arrival-based delay");
++   bot.advance(10000);check(player.x==90 && writes==0 && syncs==0,"terminal wait cannot teleport to finish");
+    check(com.adobe.serialization.json.JSON.encode(route)==before,"original route JSON remains unchanged");
+    root.auto_play=false;bot.advance(10001);check(!player.left && !player.right,"disable releases keys immediately");
+-   root.auto_play=true;bot.advance(11000);bot.advance(11300);check(player.right && writes==0 && syncs==0,"reactivation replays first step without teleport");
+-   player.dead=true;bot.advance(11301);check(!player.right,"death releases held keys");player.dead=false;bot.advance(11400);bot.advance(11650);check(player.right && writes==0 && syncs==0,"respawn restarts without a teleport correction");
++   player.x=30;root.auto_play=true;bot.advance(11000);bot.advance(11250);check(player.right && writes==0 && syncs==0,"reactivation clears pending target and timing state");
++   player.dead=true;bot.advance(11251);check(!player.right,"death releases held keys");player.dead=false;bot.advance(11400);bot.advance(11650);check(player.right && writes==0 && syncs==0,"respawn starts a fresh arrival clock without teleport");
+    root.auto_play=false;bot.advance(11651);
+-   ExternalInterface.call("recordTest","PASS: "+count+" original-route ordered-step, 33ms and no-teleport checks");
++   player.x=30;root.auto_play=true;var repeat:RoutePlayerNative=new RoutePlayerNative(root);
++   repeat.setRoutes({"@123":[walk(100,false,true,false,0),walk(100,true,false,false,100),["hole",100]]});repeat.setTiming(new RouteTiming(1,false));
++   repeat.advance(20000);repeat.advance(20250);player.x=60;repeat.advance(20350);
++   check(repeat.message.indexOf("aguardando chegada ao ponto 2/3")>=0,"a previous visit to repeated coordinates cannot falsely confirm a later target");
++   player.x=30;repeat.advance(20400);check(repeat.message.indexOf("2/3")>=0 && repeat.message.indexOf("aguardando chegada")<0,"return target requires a fresh actual arrival");
++   root.auto_play=false;repeat.advance(20401);
++   // Independent keyboard/acceleration model: physics moves the player, not the Robot.
++   player.x=30;player.y=330.6;body.velocity.vx=0;body.velocity.vy=0;root.auto_play=true;
++   var departure:Array=walk(100,false,true,false,0);departure[0].vx=0;departure[0].vy=0;
++   var middle:Array=walk(200,false,true,false,100);middle[0].vy=0;
++   var stop:Array=walk(300,false,false,false,100);stop[0].vx=0;stop[0].vy=0;
++   var sim:RoutePlayerNative=new RoutePlayerNative(root);sim.setRoutes({"@123":[departure,middle,stop,["hole",200]]});sim.setTiming(new RouteTiming(1,false));sim.advance(21000);
++   var completed:Boolean=false;var lastArrival:int=-1;
++   for(var tick:int=21016;tick<26000;tick+=16){
++    var vx:Number=body.velocity.vx;var acceleration:Number=12*0.016;
++    if(player.right)vx=Math.min(3.45,vx+acceleration);
++    else if(player.left)vx=Math.max(-3.45,vx-acceleration);
++    else vx=vx>0 ? Math.max(0,vx-acceleration) : Math.min(0,vx+acceleration);
++    body.velocity.vx=vx;player.x+=vx*30*0.016;var physicalX:Number=player.x;sim.advance(tick);
++    check(player.x==physicalX && body.velocity.vx==vx,"keyboard physics simulation never receives a position or velocity write");
++    if(lastArrival<0 && sim.message.indexOf("executando @123 | 3/4")>=0)lastArrival=tick;
++    if(lastArrival>=0 && tick<lastArrival+200)check(sim.message.indexOf("confirmacao")<0,"terminal delay counts from physical arrival in independent movement simulation");
++    if(sim.message.indexOf("confirmacao")>=0){completed=true;break;}
++   }
++   check(completed && lastArrival>=0,"native-key model reaches all three physical checkpoints before the terminal marker");
++   check(writes==0 && syncs==0,"independent movement simulation never invokes teleport or sync handlers");
++   root.auto_play=false;sim.advance(26001);
++   ExternalInterface.call("recordTest","PASS: "+count+" arrival-clock, ordered-step, 33ms and no-teleport checks");
+   }catch(error:Error){ExternalInterface.call("recordTest","FAIL: "+error.message+" #"+error.errorID);}}
+  }
+ }
+--- a/fontes-robot/RoutePlayerNative.as
++++ b/fontes-robot/RoutePlayerNative.as
+@@ -3,7 +3,7 @@
+  public class RoutePlayerNative {
+   private var cheeseConfirmed:Boolean=false;private var cheeseWaitUntil:int=-1;private var cheeseWaitStarted:int=0;private var managed:Boolean=false;private var managedOn:Boolean=false;private var worldSpace:Boolean=false;
+   private static var instances:Dictionary=new Dictionary(true);
+-  private var focused:Boolean=true;private var suspendedAt:int=-1;private var roundToken:String="";private var restartPending:Boolean=false;private var waitingSpawn:Boolean=false;private var restUntil:int=0;private var restAt:int=0;private var lastState:Object;private var timing:RouteTiming;private var synchronized:Boolean=false;
++  private var pendingTarget:Object;private var pendingSince:Number=0;private var feedback:RouteFeedback=new RouteFeedback();private var inputPacer:RouteInputPacer=new RouteInputPacer();private var lastControl:Object={left:false,right:false,jump:false};private var focused:Boolean=true;private var suspendedAt:int=-1;private var roundToken:String="";private var restartPending:Boolean=false;private var waitingSpawn:Boolean=false;private var restUntil:int=0;private var restAt:int=0;private var lastState:Object;private var timing:RouteTiming;private var synchronized:Boolean=false;
+   private var remote:Boolean=true;private var loadingCode:String="";private var failedCode:String="";private var cacheOrder:Array=[];private var root:MovieClip;private var motion:NativeMotion;private var routes:Object;private var loadError:String="";private var loader:URLLoader;
+   private var map:Object;private var player:Object;private var body:Object;private var code:String="";private var aliveBefore:Boolean=false;
+   private var sequence:Array;private var index:int=0;private var due:Number=0;private var lastWalkAt:Number=-1;private var settle:int=0;private var enabled:Boolean=false;private var attempted:Boolean=false;private var running:Boolean=false;private var paused:Boolean=false;
+@@ -43,9 +43,9 @@
+    if(total==0)throw new Error("Empty route dictionary",2503);cancelLoad();remote=false;routes=value;loadError="";
+   }
+   private function status(text:String):void{message=text;var ui:Object=root["Interface"];if(ui && ui["status_field"])ui["status_field"].text=text;}
+-  private function release():void{motion.release(this);}
++  private function release():void{inputPacer.reset();motion.release(this);lastControl={left:false,right:false,jump:false};}
+   public function pause():void{if(!enabled)return;release();running=false;paused=true;pauseMessage="Robot: pausado pela tecla; reative para reiniciar";status(pauseMessage);}
+-  private function reset(now:int):void{cheeseConfirmed=false;cheeseWaitUntil=-1;release();running=false;attempted=false;paused=false;failure="";won=false;entering=false;holeWaitUntil=0;sequence=null;index=0;lastWalkAt=-1;hasSample=false;synchronized=false;timing.reset(now);restUntil=0;lastState=null;waitingSpawn=false;restartPending=false;suspendedAt=-1;retryAt=0;settle=now+250;}
++  private function reset(now:int):void{pendingTarget=null;feedback.reset();cheeseConfirmed=false;cheeseWaitUntil=-1;release();running=false;attempted=false;paused=false;failure="";won=false;entering=false;holeWaitUntil=0;sequence=null;index=0;lastWalkAt=-1;hasSample=false;synchronized=false;timing.reset(now);restUntil=0;lastState=null;waitingSpawn=false;restartPending=false;suspendedAt=-1;retryAt=0;settle=now+250;}
+   public function setFocused(value:Boolean):void{focused=value;if(!value)release();}
+   public function setTiming(policy:RouteTiming):void{timing=policy ? policy : new RouteTiming(1,false);}
+   private function hasMovement(route:Array):Boolean{for each(var step:Array in route){if(step[1]=="hole")return false;if(step[1]=="walk")return true;}return false;}
+@@ -138,10 +138,11 @@
+     var held:Number=Math.max(0,now-restAt);due+=held;restUntil=0;
+     if(lastState)motion.movement(this,lastState.ml,lastState.mr,lastState.jump);
+    }
++   feedback.observe(player,body,k,now,lastControl);
++   if(!pendingTarget && lastState)sendControl({left:lastState.ml,right:lastState.mr,jump:lastState.jump},now);
+    var count:int=0;var walks:int=0;
+    while(running && now>=due && count<256){
+     var step:Array=sequence[index];if(String(step[1])=="walk"){if(walks>=1 || (lastWalkAt>=0 && now-lastWalkAt<33))break;walks++;}
+-    if(now-due>500 && cheeseWaitUntil<0)throw new Error("Janela atrasada; reinicie a rota",2603);
+     if(!apply(step,k,now))return;
+     if(String(step[1])=="walk"){
+      lastWalkAt=now;
+@@ -153,10 +154,6 @@
+     if(entering)break;
+     if(index>=sequence.length){running=false;release();break;}
+     due+=Number(sequence[index][2]);
+-    if(step[1]=="walk"){
+-     var rest:int=timing.restDelay(now,canMicroRest(sequence[index]));
+-     if(rest>0){restAt=now;restUntil=now+rest;motion.movement(this,false,false,false);status("Robot: microparada "+rest+" ms | "+code);return;}
+-    }
+    }
+    if(entering){status("Robot: aguardando confirmacao nativa da toca");return;}
+    status(running ? "Robot: executando "+code+" | "+index+"/"+sequence.length : "Robot: rota finalizada | "+code);
+@@ -167,18 +164,29 @@
+    var b:ByteArray=new ByteArray();b.writeInt(Number(p.x));b.writeInt(Number(p.y));b.writeShort(Number(p.vx));b.writeShort(Number(p.vy));b.position=0;
+    return {x:b.readInt()/100*30,y:b.readInt()/100*30,vx:b.readShort()/100,vy:b.readShort()/100,frame:int(p.frame)<<24>>24,mr:Boolean(p.mr),ml:Boolean(p.ml),jump:Boolean(p.jump)};
+   }
++  private function sendControl(control:Object,now:int):void{
++   if(inputPacer.allow(control,now)){motion.movement(this,control.left,control.right,control.jump);lastControl=control;}
++  }
+   private function apply(step:Array,k:Object,now:int):Boolean{
+    var action:String=String(step[1]);
+    if(action=="walk"){
+-    var p:Object=decodeMovement(step[0]);
+-    if(mirror){p.x=width-p.x;p.vx=-p.vx;var oldRight:Boolean=p.mr;p.mr=p.ml;p.ml=oldRight;}
+-    var dx:Number=p.x-Number(player.x);var dy:Number=p.y-Number(player.y);var error:Number=Math.sqrt(dx*dx+dy*dy);
+-    if(!isFinite(error))throw new Error("Posicao local indisponivel",2601);
+-    if(!hasSample && error>96)return waitForSpawn("inicio da rota distante "+Math.round(error)+"px");
+-    // Horizontal microadjustment while moving; no random sleeps or extra packets.
+-    var eligible:Boolean=!p.jump && p.vy==0 && p.mr!=p.ml && p.vx!=0;
+-    p.x+=timing.coordinateX(eligible);
+-    motion.followSample(this,p.ml,p.mr,p.jump,p.x,p.y);lastState=p;hasSample=true;
++    if(!pendingTarget){
++     var p:Object=decodeMovement(step[0]);
++     if(mirror){p.x=width-p.x;p.vx=-p.vx;var oldRight:Boolean=p.mr;p.mr=p.ml;p.ml=oldRight;}
++     var observed:Object=feedback.state();
++     var dx:Number=p.x-observed.x;var dy:Number=p.y-observed.y;var error:Number=Math.sqrt(dx*dx+dy*dy);
++     if(!isFinite(error))throw new Error("Posicao local indisponivel",2601);
++     if(!hasSample && error>96)return waitForSpawn("inicio da rota distante "+Math.round(error)+"px");
++     pendingTarget=p;pendingSince=now;feedback.changeInputs();
++    }
++    if(!feedback.checkpoint(pendingTarget,Math.max(feedback.since(),pendingSince),lastState)){
++     sendControl(feedback.controls(pendingTarget,lastState),now);
++     var current:Object=feedback.state();
++     status("Robot: aguardando chegada ao ponto "+(index+1)+"/"+sequence.length+" | dx "+Math.round(pendingTarget.x-current.x)+" dy "+Math.round(pendingTarget.y-current.y)+" | "+code);
++     return false;
++    }
++    feedback.crossedAt(feedback.hitAt);lastState=pendingTarget;pendingTarget=null;hasSample=true;
++    sendControl({left:lastState.ml,right:lastState.mr,jump:lastState.jump},now);
+    }else if(action=="crouch" || action=="duck")motion.crouch(this,Number(step[0])!=0);
+    else if(action=="cheese"){
+     if(managed){
+--- a/fontes-robot/VerifyRobot.java
++++ b/fontes-robot/VerifyRobot.java
+@@ -13,12 +13,12 @@
+    for(var t:traits)if(t instanceof com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter){String n=a.constants.getString(a.constants.getMultiname(t.name_index).name_index);if(cls.equals("disney.RoutePlayer")||retired.contains(n)){int mi=((com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter)t).method_info;if(!Arrays.equals(a.findBody(mi).getCodeBytes(),b.findBody(mi).getCodeBytes()))expected.add(mi);byte[] bytes=b.findBody(mi).getCodeBytes();if(!Arrays.equals(bytes,new byte[]{0x47})&&!Arrays.equals(bytes,new byte[]{0x20,0x48}))throw new Exception("Legacy method not inert: "+cls+"."+n);inert++;}}
+   }
+   if(inert!=23 || !changed.equals(expected))throw new Exception("Unexpected changes: "+changed);
+-  if(b.instance_info.size()!=a.instance_info.size()+15||b.findClassByName("disney.FollowControllerV13Shared")<0)throw new Exception("Class count mismatch");
++  if(b.instance_info.size()!=a.instance_info.size()+17||b.findClassByName("disney.FollowControllerV13Shared")<0)throw new Exception("Class count mismatch");
+   boolean packetHook=false;for(var t:b.instance_info.get(main).instance_traits.traits)if(t instanceof com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter && "handle_packet".equals(b.constants.getString(b.constants.getMultiname(t.name_index).name_index))){var code=b.findBody(((com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter)t).method_info).getCode().code;int[] expectedOps={0x60,0xd0,0xd1,0x46,0x12,0x47};for(int i=0;i<6;i++)if(code.get(i).definition.instructionCode!=expectedOps[i])throw new Exception("AutoBest packet gate malformed");if(!"FollowAutoBest".equals(b.constants.getString(b.constants.getMultiname(code.get(0).operands[0]).name_index)) || !"receive".equals(b.constants.getString(b.constants.getMultiname(code.get(3).operands[0]).name_index)) || code.get(3).operands[1]!=2 || code.get(4).operands[0]!=1)throw new Exception("AutoBest profile-only packet gate changed");packetHook=true;}if(!packetHook)throw new Exception("Missing AutoBest packet gate");
+   int driver=b.findClassByName("disney.NativeMotion");boolean shared=false;
+   for(var t:b.instance_info.get(driver).instance_traits.traits)if(t instanceof com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter){String n=b.constants.getString(b.constants.getMultiname(t.name_index).name_index);if(n.equals("replay"))throw new Exception("Obsolete velocity replay still present");if(n.equals("followSample")){var code=b.findBody(((com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter)t).method_info).getCode();var calls=new ArrayList<String>();for(var op:code.code)if(op.definition.instructionCode==0x4f)calls.add(b.constants.getString(b.constants.getMultiname(op.operands[0]).name_index)+":"+op.operands[1]);if(!calls.equals(List.of("movement:4")))throw new Exception("Shared Follow path changed: "+calls);shared=true;}}
+   if(!shared)throw new Exception("Shared Follow driver missing");
+-  for(String[] target:new String[][]{{"disney.FollowControllerV13Shared","update"},{"disney.RoutePlayerNative","apply"}}){boolean hooked=false;int ci=b.findClassByName(target[0]);for(var t:b.instance_info.get(ci).instance_traits.traits)if(t instanceof com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter && target[1].equals(b.constants.getString(b.constants.getMultiname(t.name_index).name_index))){var body=b.findBody(((com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter)t).method_info);for(var op:body.getCode().code)if(op.definition.instructionCode==0x4f && "followSample".equals(b.constants.getString(b.constants.getMultiname(op.operands[0]).name_index)))hooked=true;}if(!hooked)throw new Exception("Follow/Robot not connected to shared driver: "+Arrays.toString(target));}
++  for(String[] target:new String[][]{{"disney.FollowControllerV13Shared","update","followSample"},{"disney.RoutePlayerNative","sendControl","movement"}}){boolean hooked=false;int ci=b.findClassByName(target[0]);for(var t:b.instance_info.get(ci).instance_traits.traits)if(t instanceof com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter && target[1].equals(b.constants.getString(b.constants.getMultiname(t.name_index).name_index))){var body=b.findBody(((com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter)t).method_info);for(var op:body.getCode().code)if(op.definition.instructionCode==0x4f && target[2].equals(b.constants.getString(b.constants.getMultiname(op.operands[0]).name_index)))hooked=true;}if(!hooked)throw new Exception("Follow/Robot not connected to shared driver: "+Arrays.toString(target));}
+   int rp=b.findClassByName("disney.RoutePlayerNative");for(var t:b.instance_info.get(rp).instance_traits.traits)if("followFrame".equals(b.constants.getString(b.constants.getMultiname(t.name_index).name_index)))throw new Exception("Interpolation function remains");
+   Set<String> flags=Set.of("no_delay","insta_death","insta_death2","insta_win");
+   for(var t:b.instance_info.get(main).instance_traits.traits)if(t instanceof com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter){String n=b.constants.getString(b.constants.getMultiname(t.name_index).name_index);if(!Set.of("loop_game","handle_packet").contains(n))continue;var body=b.findBody(((com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter)t).method_info);for(int i=0;i<body.getCode().code.size();i++){var op=body.getCode().code.get(i);if(op.definition.instructionCode==0x66){String p=b.constants.getString(b.constants.getMultiname(op.operands[0]).name_index);if(p!=null&&flags.contains(p))throw new Exception("Legacy flag still read: "+p);if("play_map".equals(p)&&i+1<body.getCode().code.size()){var next=body.getCode().code.get(i+1);if(next.definition.instructionCode==0x4f&&"addEventListener".equals(b.constants.getString(b.constants.getMultiname(next.operands[0]).name_index)))throw new Exception("Old playback listener still registered");}}}}
+--- /dev/null
++++ b/fontes-robot/RouteInputPacer.as
+@@ -0,0 +1,16 @@
++package disney {
++ // Coalesces Robot input changes before the native game handles/sends them.
++ // No socket queue, encryption changes, heartbeat delay or artificial lag.
++ public class RouteInputPacer {
++  public static const INTERVAL:int=33;
++  private var emitted:Object;
++  private var at:Number=0;
++  public function reset():void{emitted=null;at=0;}
++  public function allow(input:Object,now:Number):Boolean{
++   if(!input || !isFinite(now))return false;
++   if(emitted && input.left==emitted.left && input.right==emitted.right && input.jump==emitted.jump)return false;
++   if(emitted && now>=at && now-at<INTERVAL)return false;
++   emitted={left:Boolean(input.left),right:Boolean(input.right),jump:Boolean(input.jump)};at=now;return true;
++  }
++ }
++}
+--- /dev/null
++++ b/fontes-robot/RouteFeedback.as
+@@ -0,0 +1,191 @@
++package disney {
++ import flash.display.MovieClip;
++
++ // Read-only feedback. All actuation remains in NativeMotion.movement().
++ public class RouteFeedback {
++  public static const RADIUS:Number=24;
++  public static const CONFIRM_RADIUS:Number=8;
++  public var hitAt:Number;
++  private var history:Array=[];
++  private var current:Object;
++  private var correction:int=0;
++  private var boundary:Number=-1;
++  private var frameSeconds:Number=1/60;
++  private var braking:Number=12;
++  private var gravity:Number=10;
++  private var jumpStarted:Boolean=false;
++  public var source:String="aguardando";
++
++  public function reset():void {history=[];current=null;correction=0;boundary=-1;hitAt=NaN;source="aguardando";frameSeconds=1/60;braking=12;gravity=10;jumpStarted=false;}
++  private function read(o:Object,key:*):* {
++   try {if(o && key!=null && key in o)return o[key];}catch(ignored:Error){}
++   return null;
++  }
++  private function component(o:Object,a:*,b:*):Number {
++   var v:* = read(o,a);if(v==null)v=read(o,b);
++   return v is Number && isFinite(Number(v)) ? Number(v) : NaN;
++  }
++  public function observe(player:Object,body:Object,k:Object,now:Number,inputs:Object=null):Object {
++   var x:Number=Number(player.x);var y:Number=Number(player.y);
++   try {
++    var transform:Function=read(body,k.get_x_form) as Function;
++    if(transform!=null){var t:Object=transform.apply(body,[]);var pos:Object=t ? t.position : null;
++     var px:Number=component(pos,k.pos_x,null);var py:Number=component(pos,k.pos_y,null);
++     if(isFinite(px) && isFinite(py)){x=px*30;y=py*30;}
++    }
++   }catch(ignoredTransform:Error){}
++   if(!isFinite(x) || !isFinite(y))throw new Error("Posicao local indisponivel",2601);
++   var vx:Number=NaN;var vy:Number=NaN;
++   try {
++    var getter:Function=read(body,k.get_linear_velocity) as Function;
++    var velocity:Object=getter!=null ? getter.apply(body,[]) : read(body,k.physics_state);
++    vx=component(velocity,k.pos_x,k.physics_state_vx);
++    vy=component(velocity,k.pos_y,k.physics_state_vy);
++   }catch(ignoredVelocity:Error){}
++   source="nativa";
++   if(!isFinite(vx) || !isFinite(vy)){
++    source="estimada";
++    if(current && now>current.time && now-current.time<=250){
++     var seconds:Number=(now-current.time)/1000;
++     vx=(x-current.x)/(30*seconds);vy=(y-current.y)/(30*seconds);
++    }else{vx=0;vy=0;source="aguardando";}
++   }
++   if(current && now>current.time && now-current.time<=100){
++    var dt:Number=(now-current.time)/1000;
++    frameSeconds=0.75*frameSeconds+0.25*dt;
++    var observedGravity:Number=(vy-current.vy)/dt;
++    if(source=="nativa" && Math.abs(current.vy)>0.7 && Math.abs(vy)>0.7 && observedGravity>=2 && observedGravity<=25)
++     gravity=0.85*gravity+0.15*observedGravity;
++    if(source=="nativa" && inputs && Math.abs(current.vx)>0.5 &&
++       ((current.vx>0 && inputs.left && !inputs.right) || (current.vx<0 && inputs.right && !inputs.left))){
++     var deceleration:Number=(Math.abs(current.vx)-Math.abs(vx))/dt;
++     // Ignore impacts, bounces and ambiguous external impulses.
++     if(current.vx*vx>0 && deceleration>=2 && deceleration<=40)braking=0.8*braking+0.2*deceleration;
++    }
++   }
++   current={x:x,y:y,vx:vx,vy:vy,time:now,phase:vy < -0.35 ? "subindo" : (vy > 0.35 ? "caindo" : "apoio")};history.push(current);
++   while(history.length>512)history.shift();
++   return current;
++  }
++  public function state():Object {return current;}
++  // Circle entry plus forward progress along the incoming route segment.
++  // Returns the earliest actual visit, not the timestamp of the recorded step.
++  private function entry(a:Object,b:Object,target:Object,previous:Object,since:Number):Number {
++   // The same coordinate can occur on ascent and descent. Do not consume a
++   // future landing checkpoint during the outward half of the jump.
++   if(Number(target.vy)<-0.7 && Number(a.vy)>0.7 && Number(b.vy)>0.7)return NaN;
++   if(Number(target.vy)>0.7 && Number(a.vy)<-0.7 && Number(b.vy)<-0.7)return NaN;
++   var elapsed:Number=b.time-a.time;
++   var lo:Number=elapsed>0 ? Math.max(0,(since-a.time)/elapsed) : 0;
++   var hi:Number=1;
++   if(lo>hi || b.time<since)return NaN;
++   var sx:Number=b.x-a.x;var sy:Number=b.y-a.y;var length2:Number=sx*sx+sy*sy;
++   var mx:Number=a.x-target.x;var my:Number=a.y-target.y;
++   var radius2:Number=CONFIRM_RADIUS*CONFIRM_RADIUS;
++   if(length2<=0){if(mx*mx+my*my>radius2)return NaN;}
++   else {
++    var linear:Number=2*(mx*sx+my*sy);
++    var constant:Number=mx*mx+my*my-radius2;
++    var discriminant:Number=linear*linear-4*length2*constant;
++    if(discriminant<0)return NaN;
++    var root:Number=Math.sqrt(Math.max(0,discriminant));
++    lo=Math.max(lo,(-linear-root)/(2*length2));
++    hi=Math.min(hi,(-linear+root)/(2*length2));
++   }
++   if(previous){
++    var ux:Number=target.x-previous.x;var uy:Number=target.y-previous.y;
++    var distance:Number=Math.sqrt(ux*ux+uy*uy);
++    if(distance>0.000001){
++     ux/=distance;uy/=distance;
++     var before:Number=mx*ux+my*uy;
++     var progress:Number=sx*ux+sy*uy;
++     var tolerance:Number=Math.min(2,Math.max(0.5,distance*0.1));
++     if(Math.abs(progress)<0.000000001){if(before < -tolerance)return NaN;}
++     else if(progress>0)lo=Math.max(lo,(-tolerance-before)/progress);
++     else hi=Math.min(hi,(-tolerance-before)/progress);
++    }
++   }
++   if(lo>hi+0.00000001 || hi<0 || lo>1)return NaN;
++   lo=Math.max(0,Math.min(1,lo));
++   return a.time+lo*elapsed;
++  }
++  public function checkpoint(target:Object,since:Number,previous:Object=null):Boolean {
++   hitAt=NaN;if(!current)return false;
++   var from:int=0;var to:int=history.length;
++   while(from<to){var middle:int=int((from+to)/2);if(history[middle].time<since)from=middle+1;else to=middle;}
++   for(var i:int=from;i<history.length;i++){
++    var b:Object=history[i];
++    var a:Object=i>0 ? history[i-1] : b;
++    var sx:Number=b.x-a.x;var sy:Number=b.y-a.y;
++    var span:Number=b.time-a.time;
++    // Cropping at 'since' keeps the unconsumed part of the same frame's path.
++    // Large external repositions never become synthetic swept segments.
++    if(span>250 || span<=0 || sx*sx+sy*sy>4096)a=b;
++    var visited:Number=entry(a,b,target,previous,since);
++    if(isFinite(visited)){hitAt=visited;return true;}
++   }
++   return false;
++  }
++  public function crossedAt(now:Number):void {boundary=Math.max(boundary,now);}
++  public function changeInputs():void {correction=0;jumpStarted=false;}
++  public function since():Number {return boundary;}
++
++  // Samples describe the state AT a waypoint. Keep the incoming command
++  // until arrival; do not apply a future reversal at the previous waypoint.
++  public function controls(target:Object,previous:Object=null):Object {
++   if(!target || !current)return {left:false,right:false,jump:false};
++   var incoming:Object=previous ? previous : target;
++   var l:Boolean=Boolean(incoming.ml);var r:Boolean=Boolean(incoming.mr);
++   var jump:Boolean=Boolean(incoming.jump);
++   var dx:Number=target.x-current.x;
++   var direction:Number=dx<0 ? -1 : 1;
++   var desired:Number=Math.abs(Number(target.vx));
++   if(previous){
++    var span:Number=Math.abs(target.x-previous.x);
++    var progress:Number=span>0.5 ? Math.max(0,Math.min(1,1-Math.abs(dx)/span)) : 1;
++    desired=Math.abs(Number(previous.vx))*(1-progress)+desired*progress;
++    // A resting departure snapshot is not a command to stay at rest.
++    if(desired<0.35 && Math.abs(dx)>2 && (l!=r || target.ml!=target.mr))desired=3.45;
++   }
++   var wantedVX:Number=desired*direction;
++   if(Math.abs(dx)<=0.5)wantedVX=l!=r ? (l ? -desired : desired) : Number(target.vx);
++   // Limit the approach speed when the recording actually stops here.
++   // v^2 = v_end^2 + 2*a*distance, with units converted from pixels to metres.
++   if(previous && Math.abs(Number(target.vx))<0.35 && !target.ml && !target.mr){
++    var stopping:Number=Math.sqrt(Number(target.vx)*Number(target.vx)+2*braking*Math.max(0,Math.abs(dx)-1)/30);
++    wantedVX=direction*Math.min(Math.abs(wantedVX),stopping);
++   }
++   // Predict one measured frame ahead to brake before overshooting.
++   var horizon:Number=Math.max(0.008,Math.min(0.05,frameSeconds));
++   var predictedError:Number=dx-(current.vx-wantedVX)*30*horizon;
++   var effort:Number=0.045*predictedError+0.8*(wantedVX-current.vx);
++   if(Math.abs(effort)>=0.8)correction=effort<0 ? -1 : 1;
++   else if(Math.abs(effort)<=0.25)correction=0;
++   if(Math.abs(dx)>0.5 && Math.abs(current.vx)<0.35 && Math.abs(effort)<0.8)correction=direction;
++   if(correction<0){l=true;r=false;}
++   else if(correction>0){l=false;r=true;}
++   if(previous && Boolean(target.jump)!=Boolean(previous.jump)){
++    if(target.jump){
++     // Reconstruct the takeoff from the first rising sample. This allows an
++     // elevated checkpoint without jumping a whole segment too early.
++     var flight:Number=Math.max(0,Math.min(0.5,(Number(target.vy)+5)/gravity));
++     var launchX:Number=target.x-Number(target.vx)*30*flight;
++     var launchY:Number=target.y-30*(-5*flight+0.5*gravity*flight*flight);
++     var travel:Number=target.x-previous.x;
++     var nearLaunch:Boolean=Math.abs(launchX-current.x)<=Math.max(2,Math.abs(current.vx)*30*horizon);
++     var passedLaunch:Boolean=travel>0 ? current.x>=launchX : (travel<0 ? current.x<=launchX : nearLaunch);
++     var grounded:Boolean=Math.abs(current.vy)<0.35;
++     var plausible:Boolean=Number(target.vy)<=-0.35 && Number(target.vy)>=-5.35 && Math.abs(launchY-current.y)<=8;
++     jumpStarted=jumpStarted || (plausible && (nearLaunch || passedLaunch)) ||
++          (grounded && !plausible && target.y<current.y-8 && Math.abs(travel)<2);
++     jump=jumpStarted;
++    }else{
++     // Releasing UP does not force vertical velocity; release at the sample.
++     jump=Boolean(previous.jump);
++    }
++   }
++   return {left:l,right:r,jump:jump};
++  }
++
++ }
++}
