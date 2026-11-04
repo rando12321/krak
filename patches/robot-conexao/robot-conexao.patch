@@ -1,0 +1,1732 @@
+--- a/DisneyClient/api/diagnostics.py
++++ b/DisneyClient/api/diagnostics.py
+@@ -1,19 +1,33 @@
+-# Python / diagnostics.py / Python 3.11 / authenticated local Flash diagnostics, without packet or token contents
++# Python / diagnostics.py / Python 3.11 / authenticated Flash connection diagnostics, without packet or token contents
+ from aiohttp import web
+ from datetime import datetime,timezone
+ from pathlib import Path
+ import json
+ import time
++import re
+ from .common import authorize
+
+-EVENTS={'guard_ready','frame_error','socket_close','io_error','security_error','physics','teleport'}
++EVENTS={'guard_ready','frame_error','socket_close','io_error','security_error','physics','teleport','socket_disconnected'}
+ OPTIONS={'teleport','auto_play','recording','change_jump_delay','change_jump_height','change_jump_speed','change_movement_speed','mass_reduction','insta_death','insta_win','no_delay','no_bulle','soft_mode','macro'}
++
++CONNECTION_EVENTS={'socket_close','socket_disconnected','io_error','security_error'}
++
++def sanitize(value,limit):
++    value=re.sub(r'https?://[^\s<>]+','[url]',value,flags=re.I)
++    value=re.sub(r'((?:access_token|flash_token|password|authorization)\s*[:=]\s*)[^\s,;]+',r'\1[redacted]',value,flags=re.I)
++    return re.sub(r'[\x00-\x1f\x7f]',' ',value)[:limit]
++
++def append_log(target,record):
++    target.parent.mkdir(exist_ok=True,parents=True)
++    if target.exists() and target.stat().st_size>5*1024*1024:
++        target.replace(target.with_name(target.stem+'.previous'+target.suffix))
++    with target.open('a',encoding='utf-8') as handle:handle.write(json.dumps(record,ensure_ascii=True)+'\n')
+
+ class Diagnostics(web.View):
+     async def post(self):
+-        if self.request.remote not in {'127.0.0.1','::1'}:
+-            raise web.HTTPForbidden()
+         row=await authorize(self.request)
++        if self.request.content_length and self.request.content_length>16384:
++            raise web.HTTPRequestEntityTooLarge(max_size=16384,actual_size=self.request.content_length)
+         values=await self.request.post()
+         event=values.get('event','');channel=values.get('channel','')
+         if event not in EVENTS or channel not in {'main','bulle','client'}:raise web.HTTPBadRequest()
+@@ -56,16 +70,38 @@
+             if 'alive' in values:
+                 if values['alive'] not in {'0','1'}:raise web.HTTPBadRequest()
+                 extra['alive']=values['alive']=='1'
+-        now=time.monotonic();key=(row['user_id'],'teleport') if event=='teleport' else row['user_id'];rates=self.request.app['diagnostics_rate']
++        # These are observations from the authenticated client, not an
++        # authoritative explanation supplied by the game server.
++        for field,limit in [('message',1000),('nickname',60),('robot_status',220),('map',16),('client_id',80),('event_id',100),('build',80)]:
++            if field in values:
++                value=values[field]
++                if not isinstance(value,str) or len(value)>max(limit*4,1000):raise web.HTTPBadRequest()
++                extra[field]=sanitize(value,limit)
++        if 'map' in extra and extra['map'] and not re.fullmatch(r'@[0-9]{1,12}',extra['map']):raise web.HTTPBadRequest()
++        for flag in ('current_socket','main_connected'):
++            if flag in values:
++                if values[flag] not in {'0','1'}:raise web.HTTPBadRequest()
++                extra[flag]=values[flag]=='1'
++        event_id=extra.get('event_id','')
++        if event_id and not re.fullmatch(r'[A-Za-z0-9_-]{1,100}',event_id):raise web.HTTPBadRequest()
++        now=time.monotonic();key=(row['user_id'],'connection') if event in CONNECTION_EVENTS else ((row['user_id'],'teleport') if event=='teleport' else row['user_id']);rates=self.request.app['diagnostics_rate']
++        seen=rates.setdefault(('connection_event_ids',),{})
++        for old,stamp in list(seen.items()):
++            if now-stamp>600:seen.pop(old,None)
++        dedup=(row['user_id'],event_id)
++        if event_id and dedup in seen:return web.json_response({'saved':True,'duplicate':True})
++        if len(seen)>=4096:seen.pop(next(iter(seen)))
+         start,count=rates.get(key,(now,0))
+         if now-start>=60:start,count=now,0
+-        if count>=(120 if event=='teleport' else 30):raise web.HTTPTooManyRequests()
++        if count>=(120 if event=='teleport' or event in CONNECTION_EVENTS else 30):raise web.HTTPTooManyRequests()
+         rates[key]=(start,count+1)
+-        record={'time':datetime.now(timezone.utc).isoformat(),'event':event,'code':code,'channel':channel,'elapsed_ms':elapsed,'active_options':options}
++        record={'user_id':row['user_id'],'client_ip':self.request.remote,'time':datetime.now(timezone.utc).isoformat(),'event':event,'code':code,'channel':channel,'elapsed_ms':elapsed,'active_options':options}
+         record.update(extra)
+-        folder=Path(self.request.app['root']).parent/'logs-client';folder.mkdir(exist_ok=True)
+-        target=folder/'flash-diagnostics.jsonl'
+-        if target.exists() and target.stat().st_size>5*1024*1024:
+-            target.replace(folder/'flash-diagnostics.previous.jsonl')
+-        with target.open('a',encoding='utf-8') as handle:handle.write(json.dumps(record,ensure_ascii=True)+'\n')
++        folder=Path(self.request.app['root']).parent/'logs-client'
++        if event in CONNECTION_EVENTS:
++            record.update(reason_source='flash_event',game_server_reason=None)
++            record['reason']={'socket_close':'connection_closed_without_game_reason','socket_disconnected':'connection_lost_without_close_event','io_error':'network_io_error','security_error':'flash_security_error'}[event]
++            append_log(folder/'disconnects.jsonl',record)
++        append_log(folder/'flash-diagnostics.jsonl',record)
++        if event_id:seen[dedup]=now
+         return web.json_response({'saved':True})
+--- a/fontes-autoplay/RoutePlayer.as
++++ b/fontes-autoplay/RoutePlayer.as
+@@ -1,21 +1,21 @@
+ package disney {
+  import flash.display.MovieClip;import flash.display.DisplayObject;import flash.display.InteractiveObject;import flash.events.Event;import flash.events.KeyboardEvent;import flash.events.IOErrorEvent;import flash.events.SecurityErrorEvent;import flash.net.URLLoader;import flash.net.URLRequest;import flash.text.TextField;import flash.utils.Dictionary;import flash.utils.getTimer;import flash.utils.ByteArray;
+  public class RoutePlayer {
+-  private var cheeseConfirmed:Boolean=false;private var cheeseWaitUntil:int=-1;private var cheeseWaitStarted:int=0;private var managed:Boolean=false;private var managedOn:Boolean=false;private var worldSpace:Boolean=false;
++  private var managed:Boolean=false;private var managedOn:Boolean=false;private var worldSpace:Boolean=false;
+   private static var instances:Dictionary=new Dictionary(true);
+-  private var focused:Boolean=true;private var suspendedAt:int=-1;private var roundToken:String="";private var restartPending:Boolean=false;private var waitingSpawn:Boolean=false;private var restUntil:int=0;private var restAt:int=0;private var lastState:Object;private var timing:RouteTiming;private var synchronized:Boolean=false;
++  private var inputPacer:RouteInputPacer=new RouteInputPacer();private var commandState:Object;private var lastControl:Object={left:false,right:false,jump:false};private var feedback:RouteFeedback=new RouteFeedback();private var focused:Boolean=true;private var roundToken:String="";private var restartPending:Boolean=false;private var lastState:Object;
+   private var remote:Boolean=true;private var loadingCode:String="";private var failedCode:String="";private var cacheOrder:Array=[];private var root:MovieClip;private var motion:NativeMotion;private var routes:Object;private var loadError:String="";private var loader:URLLoader;
+   private var map:Object;private var player:Object;private var body:Object;private var code:String="";private var aliveBefore:Boolean=false;
+-  private var sequence:Array;private var index:int=0;private var due:Number=0;private var settle:int=0;private var enabled:Boolean=false;private var attempted:Boolean=false;private var running:Boolean=false;private var paused:Boolean=false;
+-  private var mirror:Boolean=false;private var width:Number=800;private var pauseMessage:String="Robot: pausado; reative para reiniciar";private var hasSample:Boolean=false;private var won:Boolean=false;private var entering:Boolean=false;private var holeWaitUntil:int=0;private var retryAt:int=0;private var failure:String="";public var message:String="Robot: aguardando jogo";
+-  public function RoutePlayer(value:MovieClip,external:Boolean=false){managed=external;root=value;timing=new RouteTiming(uint(getTimer())^uint(Math.random()*2147483647));motion=NativeMotion.get(value);if(!managed)motion.observeWith(packet);routes={};}
++  private var sequence:Array;private var index:int=0;private var enabled:Boolean=false;private var attempted:Boolean=false;private var running:Boolean=false;private var paused:Boolean=false;
++  private var mirror:Boolean=false;private var width:Number=800;private var pauseMessage:String="Robot: pausado; reative para reiniciar";private var won:Boolean=false;private var entering:Boolean=false;private var failure:String="";public var message:String="Robot: aguardando jogo";
++  public function RoutePlayer(value:MovieClip,external:Boolean=false){managed=external;root=value;motion=NativeMotion.get(value);if(!managed)motion.observeWith(packet);routes={};}
+   public function setManagedActive(value:Boolean):void{if(!managed)return;managedOn=value;if(!value){cancelLoad();reset(getTimer());enabled=false;}}
+   public function setWorldSpace(value:Boolean):void{worldSpace=value;}
+   public static function attach(value:MovieClip):void{
+    if(!value || !value.stage || instances[value])return;var r:RoutePlayer=new RoutePlayer(value);instances[value]=r;r.loadRoutes();
+    value.stage.addEventListener(Event.ACTIVATE,function(e:Event):void{r.setFocused(true);});
+    value.stage.addEventListener(Event.DEACTIVATE,function(e:Event):void{r.setFocused(false);});
+-   value.stage.addEventListener(Event.ENTER_FRAME,function(e:Event):void{r.advance(getTimer());});
++   value.stage.addEventListener(Event.ENTER_FRAME,function(e:Event):void{r.advance(getTimer());},false,1000);
+    value.stage.addEventListener(KeyboardEvent.KEY_DOWN,function(e:KeyboardEvent):void{
+     if(NativeMotion.isSynthetic(value))return;
+     if(value.stage.focus is TextField && TextField(value.stage.focus).type=="input")return;
+@@ -42,13 +42,12 @@
+    var total:int=0;for(var name:String in value){if(!/^@(?:[0-9]+|a|v)$/.test(name) || !(value[name] is Array))throw new Error("Invalid map route",2502);total++;}
+    if(total==0)throw new Error("Empty route dictionary",2503);cancelLoad();remote=false;routes=value;loadError="";
+   }
+-  private function status(text:String):void{message=text;var ui:Object=root["Interface"];if(ui && ui["status_field"])ui["status_field"].text=text;}
+-  private function release():void{motion.release(this);}
++  private function status(text:String):void{text="Robot ESPACIAL: "+text.replace(/^Robot: /,"");message=text;var ui:Object=root["Interface"];if(ui && ui["status_field"])ui["status_field"].text=text;}
++  private function release():void{inputPacer.reset();motion.release(this);lastControl={left:false,right:false,jump:false};}
+   public function pause():void{if(!enabled)return;release();running=false;paused=true;pauseMessage="Robot: pausado pela tecla; reative para reiniciar";status(pauseMessage);}
+-  private function reset(now:int):void{cheeseConfirmed=false;cheeseWaitUntil=-1;release();running=false;attempted=false;paused=false;failure="";won=false;entering=false;holeWaitUntil=0;sequence=null;index=0;hasSample=false;synchronized=false;timing.reset(now);restUntil=0;lastState=null;waitingSpawn=false;restartPending=false;suspendedAt=-1;retryAt=0;settle=now+250;}
++  private function reset(now:int):void{commandState=null;feedback.reset();release();running=false;attempted=false;paused=false;failure="";won=false;entering=false;sequence=null;index=0;lastState=null;restartPending=false;}
+   public function setFocused(value:Boolean):void{focused=value;if(!value)release();}
+-  public function setTiming(policy:RouteTiming):void{timing=policy ? policy : new RouteTiming(1,false);}
+-  private function hasMovement(route:Array):Boolean{for each(var step:Array in route){if(step[1]=="hole")return false;if(step[1]=="walk")return true;}return false;}
++  public function setTiming(policy:RouteTiming):void{} // compatibility: no random pauses or coordinate offsets
+   private static function integer(value:*,minimum:Number,maximum:Number):Boolean{return value is Number && isFinite(Number(value)) && Number(value)==Math.floor(Number(value)) && Number(value)>=minimum && Number(value)<=maximum;}
+   public static function decodeRoute(text:String):Array{return validate(com.adobe.serialization.json.JSON.decode(text) as Array);}
+   public static function validate(route:Array):Array{
+@@ -74,26 +73,12 @@
+    var c:int=bytes.readUnsignedByte();var cc:int=bytes.readUnsignedByte();
+    if(c==5 && cc==2){restartPending=true;return;}
+    var k:Object=root["Keys"];var local:Object=k && root["tfm"] ? root["tfm"][k.player] : null;
+-   if(c==144 && cc==6 && bytes.bytesAvailable>=4){var cheeseId:int=bytes.readInt();if(local && k.player_id && cheeseId==int(local[k.player_id]))cheeseConfirmed=true;return;}
+    if(c==144 && cc==2){bytes.readUTF();if(bytes.bytesAvailable>=4 && local && k.player_id && int(local[k.player_id])==bytes.readInt())restartPending=true;return;}
+    if(!attempted || (!running && !entering) || c!=8 || cc!=6 || bytes.bytesAvailable<5)return;
+    bytes.readUnsignedByte();var id:int=bytes.readInt();
+-   if(local && k.player_id && k.player_id in local && int(local[k.player_id])==id){won=true;entering=true;running=false;restUntil=0;release();}
++   if(local && k.player_id && k.player_id in local && int(local[k.player_id])==id){won=true;entering=true;running=false;release();}
+   }
+-  private function waitForSpawn(text:String):Boolean{waitingSpawn=true;restUntil=0;release();status("Robot: aguardando renascer para ressincronizar | "+text+" | "+code);return false;}
+-  private function nativeRest():Boolean{
+-   try{var k:Object=root["Keys"];if(!k.is_jumping || !(k.is_jumping in player) || !(player[k.is_jumping] is Boolean) || player[k.is_jumping])return false;
+-    var getter:Function=k.get_linear_velocity && k.get_linear_velocity in body ? body[k.get_linear_velocity] as Function : null;
+-    var velocity:Object=getter!=null ? getter.apply(body,[]) : body[k.physics_state];
+-    return velocity && k.physics_state_vy in velocity && isFinite(Number(velocity[k.physics_state_vy])) && Math.abs(Number(velocity[k.physics_state_vy]))<=0.02;
+-   }catch(error:Error){return false;}
+-  }
+-  private function canMicroRest(next:Array):Boolean{
+-   if(!lastState || !next || next[1]!="walk" || Number(next[2])<80 || !nativeRest())return false;
+-   var p:Object=lastState;var q:Object=decodeMovement(next[0]);if(mirror){q.x=width-q.x;var right:Boolean=q.mr;q.mr=q.ml;q.ml=right;}
+-   return !p.jump && !q.jump && p.vy==0 && q.vy==0 && p.mr!=p.ml && q.mr==p.mr && q.ml==p.ml && Math.abs(p.y-q.y)<=0.5 && Math.abs(Number(player.x)-p.x)<=4 && Math.abs(Number(player.y)-p.y)<=1;
+-  }
+-  public function advance(now:int):void{try{update(now);}catch(error:Error){release();if(error.errorID==2601 || error.errorID==2602 || error.errorID==2603){running=false;paused=true;pauseMessage="Robot: pausado | "+error.message+" | "+code;status(pauseMessage);return;}if(error.errorID==2408){retryAt=now+500;status("Robot: aguardando sincronizacao nativa #2408");return;}if(error.errorID==2403){retryAt=now+500;due+=500;status("Robot: fisica bloqueada; aguardando proximo quadro");return;}running=false;attempted=true;failure="Robot: erro #"+error.errorID+"; reative para tentar novamente";status(failure);}}
++  public function advance(now:int):void{try{update(now);}catch(error:Error){release();if(error.errorID==2601){running=false;paused=true;pauseMessage="Robot: pausado | "+error.message+" | "+code;status(pauseMessage);return;}running=false;attempted=true;failure="Robot: erro #"+error.errorID+"; reative para tentar novamente";status(failure);}}
+   private function update(now:int):void{
+    var oldUi:Object=root["Interface"];var preview:DisplayObject=oldUi ? oldUi["preview_button"] as DisplayObject : null;
+    if(preview){preview.visible=false;if(preview is InteractiveObject)InteractiveObject(preview).mouseEnabled=false;}
+@@ -102,7 +87,7 @@
+    if(!active){cancelLoad();release();running=false;enabled=false;attempted=false;paused=false;failure="";status("Robot: desligado");return;}
+    var k:Object=root["Keys"];var game:Object=root["tfm"];if(!k || !game){status("Robot: aguardando jogo");return;}
+    if(!enabled){failedCode="";loadError="";enabled=true;if(!managed)FollowControllerV13Shared.stopForRobot(root);reset(now);}
+-   for each(var symbol:String in ["bot_map_code_object","bot_map_code_value","bot_reverse","bot_map_width","player_physics","bot_set_position","b2vec2"]){if(!k[symbol]){release();status("Robot: simbolo ausente: "+symbol);return;}}
++   for each(var symbol:String in ["bot_map_code_object","bot_map_code_value","bot_reverse","bot_map_width","player_physics"]){if(!k[symbol]){release();status("Robot: simbolo ausente: "+symbol);return;}}
+    var nextMap:Object=k.map_class ? k.map_class[k.map_instance] : null;var nextPlayer:Object=game[k.player];var nextBody:Object=nextPlayer ? nextPlayer[k.player_physics] : null;
+    if(!nextMap || !nextPlayer){if(entering && nextMap===map){release();status(won ? "Robot: vitoria confirmada; aguardando renascer" : "Robot: aguardando confirmacao da toca");return;}reset(now);map=null;player=null;body=null;aliveBefore=false;status("Robot: aguardando mapa/jogador");return;}
+    var numberObject:Object=nextMap[k.bot_map_code_object];var number:Number=numberObject ? Number(numberObject[k.bot_map_code_value]) : NaN;
+@@ -111,48 +96,43 @@
+    var token:String="current_round_code" in root ? String(root["current_round_code"]) : "";
+    if(restartPending || token!=roundToken || nextMap!==map || nextCode!=code || (alive && (!aliveBefore || nextPlayer!==player || nextBody!==body)))reset(now);
+    roundToken=token;map=nextMap;player=nextPlayer;body=nextBody;code=nextCode;aliveBefore=alive;root["current_map_code"]=code;root["current_map_code_int"]=int(number);
+-   if(entering){release();running=false;if(won)status("Robot: vitoria confirmada; aguardando proxima rodada");else if(now>holeWaitUntil)status("Robot: toca nao confirmada; reative para tentar novamente");else status("Robot: aguardando confirmacao nativa da toca");return;}
++   if(entering){release();running=false;if(won)status("Robot: vitoria confirmada; aguardando proxima rodada");else status("Robot: aguardando confirmacao nativa da toca");return;}
+    if(motion.finished()){release();running=false;status("Robot: toca confirmada; aguardando renascer");return;}
+    if(!alive){release();running=false;attempted=false;status("Robot: aguardando renascer | "+code);return;}
+-   if(waitingSpawn){release();return;}
+    if(!focused || root.stage.focus is TextField && TextField(root.stage.focus).type=="input"){
+-    if(suspendedAt<0){suspendedAt=now;release();}status("Robot: aguardando foco/edicao de texto");return;
++    if(running){pause();pauseMessage="Robot: foco perdido; reative para uma nova tentativa";status(pauseMessage);}else{release();status("Robot: aguardando foco/edicao de texto");}return;
+    }
+-   if(suspendedAt>=0){var suspended:int=Math.max(0,now-suspendedAt);due+=suspended;if(restUntil>0){restAt+=suspended;restUntil+=suspended;}suspendedAt=-1;if(lastState && restUntil==0)motion.movement(this,lastState.ml,lastState.mr,lastState.jump);}
+    if(paused){status(pauseMessage);return;}
+    if(failure!=""){status(failure);return;}
+    width=Number(k.map_class[k.bot_map_width]);if(!isFinite(width)||width<1||width>100000)throw new Error("Invalid map width",2504);
+    mirror=!worldSpace && Boolean(map[k.obj_container][k.bot_reverse]);
+-   if(now<settle || !k.move_class || !k.move_class[k.move_free] || (k.timer_class && k.timer_class[k.timer_prop])){
++   if(!k.move_class || !k.move_class[k.move_free] || (k.timer_class && k.timer_class[k.timer_prop])){
+     if(running)reset(now);status("Robot: aguardando liberacao da rodada | "+code);return;
+    }
+-   if(now<retryAt)return;
+    if(!routes){status("Robot: "+(loadError!="" ? loadError : "carregando rotas_decodificadas.json"));return;}
+    if(!attempted){
+     var saved:Object=routes[code];if(!saved){if(remote){requestRoute(code);status("Robot: "+(loadError!="" ? loadError : "carregando rota "+code));}else status("Robot: sem rota para "+code);return;}
+-    sequence=saved is String ? decodeRoute(String(saved)) : validate(saved as Array);if(!synchronized && hasMovement(sequence)){motion.synchronizeCurrent();if(game[k.player]!==player || k.map_class[k.map_instance]!==map || player[k.is_dead] || !player[k.player_clip] || !player[k.player_physics])throw new Error("Lifecycle changed during sync",2408);body=player[k.player_physics];synchronized=true;}index=0;attempted=true;running=true;due=now+Number(sequence[0][2]);
++    sequence=saved is String ? decodeRoute(String(saved)) : validate(saved as Array);index=0;attempted=true;running=true;
++
+    }
+    if(!running){status("Robot: rota finalizada | "+code+" | aguardando proximo mapa");return;}
+-   if(restUntil>0){
+-    if(now<restUntil && nativeRest()){status("Robot: microparada "+(restUntil-now)+" ms | "+code);return;}
+-    var held:Number=Math.max(0,now-restAt);due+=held;restUntil=0;
+-    if(lastState)motion.movement(this,lastState.ml,lastState.mr,lastState.jump);
+-   }
+-   var count:int=0;var walks:int=0;
+-   while(running && now>=due && count<256){
+-    var step:Array=sequence[index];if(String(step[1])=="walk"){if(walks>=1)break;walks++;}
+-    if(now-due>500 && cheeseWaitUntil<0)throw new Error("Janela atrasada; reinicie a rota",2603);
+-    if(!apply(step,k,now))return;index++;count++;
++   feedback.observe(player,body,k,now,lastControl);
++   var count:int=0;
++   while(running && count<256){
++    var step:Array=sequence[index];
++    if(!apply(step,k,now)){drive(now);return;}
++    index++;count++;
+     if(entering)break;
+     if(index>=sequence.length){running=false;release();break;}
+-    due+=Number(sequence[index][2]);
+-    if(step[1]=="walk"){
+-     var rest:int=timing.restDelay(now,canMicroRest(sequence[index]));
+-     if(rest>0){restAt=now;restUntil=now+rest;motion.movement(this,false,false,false);status("Robot: microparada "+rest+" ms | "+code);return;}
+-    }
+    }
++   if(running && !entering)drive(now);
+    if(entering){status("Robot: aguardando confirmacao nativa da toca");return;}
+    status(running ? "Robot: executando "+code+" | "+index+"/"+sequence.length : "Robot: rota finalizada | "+code);
++  }
++  private function drive(now:int):void{
++   if(!commandState)return;
++   var control:Object=feedback.controls(commandState,lastState);
++   if(inputPacer.allow(control,now)){motion.movement(this,control.left,control.right,control.jump);lastControl=control;}
+   }
+   public static function decodeMovement(p:Object):Object{
+    // ByteArray conversion deliberately matches Statements.step from the loader:
+@@ -165,22 +145,23 @@
+    if(action=="walk"){
+     var p:Object=decodeMovement(step[0]);
+     if(mirror){p.x=width-p.x;p.vx=-p.vx;var oldRight:Boolean=p.mr;p.mr=p.ml;p.ml=oldRight;}
+-    var dx:Number=p.x-Number(player.x);var dy:Number=p.y-Number(player.y);var error:Number=Math.sqrt(dx*dx+dy*dy);
+-    if(!isFinite(error))throw new Error("Posicao local indisponivel",2601);
+-    if(!hasSample && error>96)return waitForSpawn("inicio da rota distante "+Math.round(error)+"px");
+-    // Horizontal microadjustment while moving; no random sleeps or extra packets.
+-    var eligible:Boolean=!p.jump && p.vy==0 && p.mr!=p.ml && p.vx!=0;
+-    p.x+=timing.coordinateX(eligible);
+-    motion.followSample(this,p.ml,p.mr,p.jump,p.x,p.y);lastState=p;hasSample=true;
++    // Spatial mode: select the target as soon as the preceding target is visited.
++    // The stored delay never schedules or blocks native input.
++    if(!commandState || commandState.ml!=p.ml || commandState.mr!=p.mr || commandState.jump!=p.jump)feedback.changeInputs();
++    commandState=p;
++    var since:Number=feedback.since();
++    if(!feedback.checkpoint(p,since,lastState)){
++     var observed:Object=feedback.state();
++     status("Robot: ponto "+(index+1)+"/"+sequence.length+" | dx "+Math.round(p.x-observed.x)+" dy "+Math.round(p.y-observed.y)+" | "+observed.phase+" | v "+feedback.source);
++     return false;
++    }
++    feedback.crossedAt(feedback.hitAt);lastState=p;
++    // Commit the sampled input only after the corresponding position is visited.
++    // The final command is coalesced in drive(); dense samples cannot emit a burst.
+    }else if(action=="crouch" || action=="duck")motion.crouch(this,Number(step[0])!=0);
+-   else if(action=="cheese"){
+-    if(managed){
+-     var actual:Boolean=cheeseConfirmed || (k.player_cheese && Boolean(player[k.player_cheese]));
+-     if(!actual){if(cheeseWaitUntil<0){cheeseWaitStarted=now;cheeseWaitUntil=now+1500;}if(now>=cheeseWaitUntil)throw new Error("Queijo nao confirmado",2604);status("Robot: aguardando queijo nativo");return false;}
+-     if(cheeseWaitUntil>=0){due+=Math.max(0,now-cheeseWaitStarted);cheeseWaitUntil=-1;}
+-    }
+-   }
+-   else if(action=="hole"){entering=true;running=false;holeWaitUntil=now+3000;release();}
++   // Cheese remains a passive marker; the native game collects it.
++   else if(action=="cheese"){}
++   else if(action=="hole"){entering=true;running=false;release();}
+    return true;
+   }
+  }
+--- /dev/null
++++ b/fontes-conexao/ConnectionDiagnostics.as
+@@ -0,0 +1,149 @@
++package disney {
++ import flash.display.MovieClip;
++ import flash.events.*;
++ import flash.net.*;
++ import flash.text.*;
++ import flash.utils.*;
++
++ // Observes existing sockets only. Never closes, delays, replaces or writes them.
++ public class ConnectionDiagnostics {
++  private static var instances:Dictionary=new Dictionary(true);
++  private var root:MovieClip;
++  private var status:TextField;
++  private var seen:Dictionary=new Dictionary(true);
++  private var channels:Object={};
++  private var faults:Object={};
++  private var queue:Array=[];
++  private var loader:URLLoader;
++  private var sentAt:int=0;
++  private var scanAt:int=0;
++  private var counter:uint=0;
++  private var client:String;
++  private var last:Object;
++  public function ConnectionDiagnostics(value:MovieClip){root=value;client="flash_"+getTimer()+"_"+uint(Math.random()*4294967295).toString(16);}
++  private static function read(o:Object,key:*):*{try{if(o && key!=null && key in o)return o[key];}catch(ignored:Error){}return null;}
++  public static function lastEvent(value:MovieClip):Object{var d:ConnectionDiagnostics=instances[value] as ConnectionDiagnostics;return d ? d.last : null;}
++  public static function pending(value:MovieClip):int{var d:ConnectionDiagnostics=instances[value] as ConnectionDiagnostics;return d ? d.queue.length : 0;}
++  public static function attach(value:MovieClip):void{
++   if(!value || !value.stage || instances[value])return;
++   var d:ConnectionDiagnostics=new ConnectionDiagnostics(value);instances[value]=d;
++   d.status=new TextField();d.status.name="sddsConnectionStatus";
++   d.status.defaultTextFormat=new TextFormat("_sans",11,0xD5E2F4);d.status.background=true;d.status.backgroundColor=0x182235;d.status.height=24;d.status.selectable=true;d.status.mouseEnabled=false;
++   d.status.text="Rede nativa | logs de conexao na VPS";value.stage.addChild(d.status);d.fit();
++   value.stage.addEventListener(Event.RESIZE,function(e:Event):void{d.fit();});
++   var nativeLoop:Function=read(value,"loop_game") as Function;
++   if(nativeLoop!=null)value.stage.removeEventListener(Event.ENTER_FRAME,nativeLoop);
++   value.stage.addEventListener(Event.ENTER_FRAME,function(e:Event):void{
++    try{if(nativeLoop!=null)nativeLoop.apply(value,[e]);}
++    catch(error:Error){
++     d.status.text="Falha do client #"+error.errorID+" | "+String(error.message).substr(0,180);
++     var now:int=getTimer();var key:String=String(error.errorID);
++     if(!(key in d.faults) || now-Number(d.faults[key])>=30000){d.faults[key]=now;d.report("frame_error",error.errorID,"client",error.message,false);}
++    }
++    d.tick();
++   });
++   d.scan();d.report("guard_ready",0,"client","",false);
++  }
++  private function fit():void{if(!root.stage)return;status.x=8;status.y=Math.max(40,root.stage.stageHeight-28);status.width=Math.max(240,root.stage.stageWidth-16);}
++  private function auth():String{
++   var settings:Object=read(root,"tfmdisney");var data:Object=read(settings,"data");
++   var access:* =read(root,"access_token");var flash:* =read(data,"flash_token");
++   if(!access || !flash)return "";
++   return "access_token="+encodeURIComponent(String(access))+"&flash_token="+encodeURIComponent(String(flash));
++  }
++  private static function clean(value:String):String{
++   value=String(value || "");
++   value=value.replace(/https?:\/\/[^\s<>]+/gi,"[url]");
++   return value.replace(/((?:access_token|flash_token|password|authorization)\s*[:=]\s*)[^\s,;]+/gi,"$1[redacted]");
++  }
++  private function nativeSocket(channel:String):Socket{
++   var k:Object=read(root,"Keys");var cls:Object=read(k,"socket_class");
++   var wrapper:Object=read(cls,read(k,channel=="main" ? "main_socket_instance" : "bulle_socket_instance"));
++   if(wrapper is Socket)return wrapper as Socket;
++   var actual:Object=read(wrapper,read(k,"socket_name"));
++   return actual is Socket ? actual as Socket : channels[channel] as Socket;
++  }
++  private function report(kind:String,code:int,channel:String,message:String,current:Boolean):void{
++   var options:Array=[];
++   for each(var name:String in ["auto_play","recording","change_jump_delay","change_jump_height","change_jump_speed","change_movement_speed","mass_reduction","insta_death","insta_win","no_delay","no_bulle","soft_mode","macro"])if(read(root,name))options.push(name);
++   var ui:Object=read(root,"Interface");var field:Object=read(ui,"status_field");
++   var map:String=String(read(root,"current_map_code") || "");if(!/^@[0-9]{1,12}$/.test(map))map="";
++   var k:Object=read(root,"Keys");var player:Object=read(read(root,"tfm"),read(k,"player"));
++   var nickname:String=clean(String(read(player,read(k,"player_name")) || "")).substr(0,60);
++   var payload:Object={nickname:nickname,event:kind,code:code,channel:channel,elapsed:getTimer(),options:options.join(","),client_id:client,event_id:client+"_"+(++counter),build:"native-diagnostics-v2",map:map,robot_status:clean(String(read(field,"text") || "")).substr(0,220),message:clean(message).substr(0,1000),current_socket:current ? "1" : "0"};
++   var main:Socket=nativeSocket("main");payload.main_connected=main && main.connected ? "1" : "0";
++   last=payload;
++   // A connection event without a session must not be attributed to a future login.
++   if(auth()=="" && kind!="guard_ready")return;
++   if(queue.length>=16)queue.splice(loader ? 1 : 0,1);
++   queue.push({payload:payload,attempts:0,retry:0,auth:auth()});pump();
++  }
++  private function finish(current:URLLoader,success:Boolean,statusCode:int):void{
++   if(loader!==current)return;loader=null;
++   if(queue.length){
++    var item:Object=queue[0];
++    if(success || statusCode==401 || statusCode==403 || item.attempts>=3)queue.shift();
++    else item.retry=getTimer()+(statusCode==429 ? 30000 : 5000);
++   }
++  }
++  private function pump():void{
++   if(loader || !queue.length)return;
++   var item:Object=queue[0];if(getTimer()<Number(item.retry))return;
++   var credentials:String=String(item.auth || "");if(credentials=="")credentials=auth();if(credentials=="")return;
++   // Retry under the original session identity; never assign its event to a new login.
++   item.auth=credentials;item.attempts++;
++   var variables:URLVariables=new URLVariables();for(var key:String in item.payload)variables[key]=item.payload[key];
++   var host:String=String(read(root,"host_url") || "");if(host!="" && host.charAt(host.length-1)!="/")host+="/";
++   var request:URLRequest=new URLRequest(host+"client_diagnostics?"+credentials);request.method=URLRequestMethod.POST;request.data=variables;
++   var current:URLLoader=new URLLoader();loader=current;sentAt=getTimer();var statusCode:int=0;
++   current.addEventListener(HTTPStatusEvent.HTTP_STATUS,function(e:HTTPStatusEvent):void{statusCode=e.status;});
++   current.addEventListener(Event.COMPLETE,function(e:Event):void{finish(current,statusCode<400,statusCode);});
++   var fail:Function=function(e:Event):void{finish(current,false,statusCode);};
++   current.addEventListener(IOErrorEvent.IO_ERROR,fail);current.addEventListener(SecurityErrorEvent.SECURITY_ERROR,fail);
++   try{current.load(request);}catch(ignored:Error){finish(current,false,statusCode);}
++  }
++  private function errorCode(e:Event):int{
++   var value:* =read(e,"errorID");if(value!=null)return int(value);
++   var match:Object=/#([0-9]+)/.exec(String(read(e,"text") || ""));return match ? int(match[1]) : 0;
++  }
++  private function bind(socket:Socket,channel:String):void{
++   channels[channel]=socket;if(seen[socket])return;
++   var state:Object={was:socket.connected,closed:false,channel:channel};seen[socket]=state;
++   socket.addEventListener(Event.CONNECT,function(e:Event):void{state.was=true;state.closed=false;});
++   socket.addEventListener(Event.CLOSE,function(e:Event):void{
++    state.closed=true;status.text="Socket "+channel+" encerrado | motivo nao informado pelo jogo";
++    report("socket_close",0,channel,"",nativeSocket(channel)===socket);
++   });
++   socket.addEventListener(IOErrorEvent.IO_ERROR,function(e:IOErrorEvent):void{
++    status.text="Erro de rede "+channel+" #"+errorCode(e);report("io_error",errorCode(e),channel,e.text,nativeSocket(channel)===socket);
++   });
++   socket.addEventListener(SecurityErrorEvent.SECURITY_ERROR,function(e:SecurityErrorEvent):void{
++    status.text="Erro de seguranca "+channel+" #"+errorCode(e);report("security_error",errorCode(e),channel,e.text,nativeSocket(channel)===socket);
++   });
++  }
++  private function observe(wrapper:Object,channel:String,k:Object):void{
++   if(!wrapper)return;
++   if(wrapper is Socket){bind(wrapper as Socket,channel);return;}
++   var direct:Object=read(wrapper,read(k,"socket_name"));
++   if(direct is Socket){bind(direct as Socket,channel);return;}
++   try{
++    var description:XML=describeType(wrapper);
++    for each(var variable:XML in description.variable){var value:Object=read(wrapper,String(variable.@name));if(value is Socket)bind(value as Socket,channel);}
++    for each(var accessor:XML in description.accessor){if(String(accessor.@access)=="writeonly")continue;value=read(wrapper,String(accessor.@name));if(value is Socket)bind(value as Socket,channel);}
++   }catch(ignored:Error){}
++  }
++  private function scan():void{
++   var k:Object=read(root,"Keys");var cls:Object=read(k,"socket_class");
++   observe(read(cls,read(k,"main_socket_instance")),"main",k);observe(read(cls,read(k,"bulle_socket_instance")),"bulle",k);
++   for(var socket:Object in seen){var state:Object=seen[socket];var nativeSocket:Socket=socket as Socket;
++    if(state.was && !nativeSocket.connected && !state.closed){state.closed=true;report("socket_disconnected",0,state.channel,"",this.nativeSocket(state.channel)===nativeSocket);}
++    state.was=nativeSocket.connected;
++   }
++  }
++  private function tick():void{
++   var now:int=getTimer();if(now>=scanAt){scanAt=now+1000;try{scan();}catch(ignored:Error){}}
++   if(loader && now-sentAt>15000){var old:URLLoader=loader;try{old.close();}catch(ignoredClose:Error){}finish(old,false,0);}
++   pump();
++  }
++ }
++}
+--- /dev/null
++++ b/fontes-conexao/ConnectionLogTests.as
+@@ -0,0 +1,59 @@
++package disney {
++ import flash.display.*;import flash.events.*;import flash.net.*;import flash.text.*;import flash.utils.*;import flash.external.ExternalInterface;
++ public class RgbMouseTests {
++  private static var count:int=0;
++  private static function check(ok:Boolean,message:String):void{if(!ok)throw new Error(message);count++;}
++  public static function run(display:MovieClip):void{try{
++   var r:MovieClip=new MovieClip();display.addChild(r);var frames:int=0;var failNext:Boolean=false;
++   r.loop_game=function(e:Event):void{frames++;if(failNext){failNext=false;throw new Error("Missing optional test property",1069);}};
++   r.host_url="";r.access_token="TEST";r.tfmdisney={data:{flash_token:"FLASH"}};
++   r.current_map_code="@123";r.auto_play=true;r.Interface={status_field:new TextField()};r.Interface.status_field.text="Robot ESPACIAL: ponto 3";
++   var main:Socket=new Socket();var bulle:Socket=new Socket();
++   r.Keys={socket_class:{main:{sock:main},room:{sock:bulle}},main_socket_instance:"main",bulle_socket_instance:"room",socket_name:"sock",player:"self",player_name:"nick"};r.tfm={self:{nick:"Self#0001"}};
++   ConnectionDiagnostics.attach(r);
++   var ready:Object=ConnectionDiagnostics.lastEvent(r);
++   check(ready.event=="guard_ready" && ready.nickname=="Self#0001" && ready.map=="@123","startup metadata identifies local player and map");
++   check(ready.options=="auto_play" && ready.robot_status.indexOf("ESPACIAL")>=0,"logs include active option and Robot state");
++   check(!ready.hasOwnProperty("access_token") && !ready.hasOwnProperty("flash_token"),"credentials are excluded from diagnostic payload");
++   main.dispatchEvent(new IOErrorEvent(IOErrorEvent.IO_ERROR,false,false,"Error #2031: Socket Error. URL: http://example.test/?access_token=SECRET",2031));
++   var io:Object=ConnectionDiagnostics.lastEvent(r);
++   check(io.event=="io_error" && io.channel=="main" && io.code==2031,"native IO event retains channel and observed error code");
++   check(io.message.indexOf("SECRET")<0 && io.message.indexOf("http://")<0,"client redacts credential-bearing URLs before transport");
++   bulle.dispatchEvent(new SecurityErrorEvent(SecurityErrorEvent.SECURITY_ERROR,false,false,"Error #2048: test security error",2048));
++   var security:Object=ConnectionDiagnostics.lastEvent(r);
++   check(security.channel=="bulle" && security.code==2048,"independent socket callbacks retain their own channel");
++   r.Keys.socket_class.main={sock:new Socket()};main.dispatchEvent(new Event(Event.CLOSE));
++   var closed:Object=ConnectionDiagnostics.lastEvent(r);
++   check(closed.event=="socket_close" && closed.channel=="main" && closed.current_socket=="0","old socket close is distinguished from currently registered connection");
++   check(closed.message=="" && !closed.hasOwnProperty("game_server_reason"),"socket close does not fabricate a game-server kick reason");
++   check(closed.client_id==ready.client_id && closed.event_id!=ready.event_id,"session correlation is stable and event IDs are unique");
++   failNext=true;r.stage.dispatchEvent(new Event(Event.ENTER_FRAME));
++   check(ConnectionDiagnostics.lastEvent(r).event=="frame_error" && ConnectionDiagnostics.lastEvent(r).code==1069,"frame fault is recorded separately from network closure");
++   r.stage.dispatchEvent(new Event(Event.ENTER_FRAME));check(frames>=2,"original frame function continues after a reported fault");
++   check(!main.connected && !bulle.connected,"observer does not connect or replace native sockets");
++   var pendingBefore:int=ConnectionDiagnostics.pending(r);r.access_token="";
++   main.dispatchEvent(new IOErrorEvent(IOErrorEvent.IO_ERROR,false,false,"Error #2032: unauthenticated fixture event",2032));
++   check(ConnectionDiagnostics.pending(r)==pendingBefore,"unauthenticated event cannot be queued under a later account");r.access_token="TEST";
++   var tries:int=0;
++   var poll:Function=function():void{
++    var loader:URLLoader=new URLLoader();
++    loader.addEventListener(Event.COMPLETE,function(e:Event):void{try{
++     var events:Array=com.adobe.serialization.json.JSON.decode(String(loader.data)) as Array;
++     if(events.length<5 || ConnectionDiagnostics.pending(r)>0){if(++tries>30)throw new Error("diagnostic HTTP queue did not flush");setTimeout(poll,100);return;}
++     var foundIO:Boolean=false;var foundClose:Boolean=false;var foundFrame:Boolean=false;
++     for each(var record:Object in events){
++      if(record.client_id!=ready.client_id)continue;
++      if(record.event=="io_error")foundIO=record.code=="2031" && String(record.message).indexOf("SECRET")<0;
++      if(record.event=="socket_close")foundClose=record.current_socket=="0";
++      if(record.event=="frame_error")foundFrame=record.code=="1069";
++     }
++     check(foundIO && foundClose && foundFrame,"native diagnostic queue delivers typed events through authenticated HTTP");
++     check(ConnectionDiagnostics.pending(r)==0,"successful requests release pending events");
++     ExternalInterface.call("recordTest","PASS: "+count+" connection observer, redaction and HTTP transport checks");
++    }catch(error:Error){ExternalInterface.call("recordTest","FAIL: connection "+error.message+" #"+error.errorID);}});
++    loader.addEventListener(IOErrorEvent.IO_ERROR,function(e:IOErrorEvent):void{ExternalInterface.call("recordTest","FAIL: connection fixture HTTP unavailable");});
++    loader.load(new URLRequest("diagnostics-fixture"));
++   };setTimeout(poll,200);
++  }catch(error:Error){ExternalInterface.call("recordTest","FAIL: connection "+error.message+" #"+error.errorID);}}
++ }
++}
+--- a/fontes-conexao/test_diagnostics.py
++++ b/fontes-conexao/test_diagnostics.py
+@@ -1,35 +1,160 @@
+-# Python / test_diagnostics.py / Python 3.11 / local diagnostics authorization and redaction
++"""Authenticated diagnostics tests with a temporary log directory and HTTP server."""
++import importlib.util
++import json
++import sys
++import tempfile
++import types
++import unittest
+ from pathlib import Path
+-import asyncio,importlib,sys,tempfile,unittest,json,types
+-from unittest.mock import patch,AsyncMock
+-sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'DisneyClient'))
++from unittest.mock import patch
+ from aiohttp import web
+-package=types.ModuleType('api');package.__path__=[str(Path(__file__).resolve().parents[1]/'DisneyClient/api')];sys.modules['api']=package
+-mod=importlib.import_module('api.diagnostics')
+-class Request:
+- remote='127.0.0.1'
+- def __init__(self,root,**values):self.app={'root':root,'diagnostics_rate':{}};self.values={'event':'guard_ready','code':'0','channel':'client','elapsed':'100','options':''};self.values.update(values)
+- async def post(self):return self.values
+-class Tests(unittest.TestCase):
+- def test_valid_log_excludes_tokens_and_payloads(self):
+-  with tempfile.TemporaryDirectory() as d:
+-   root=Path(d)/'DisneyClient';root.mkdir();request=Request(root,options='macro,change_movement_speed',access_token='PRIVATE',payload='PRIVATE')
+-   with patch.object(mod,'authorize',AsyncMock(return_value={'user_id':7})):response=asyncio.run(mod.Diagnostics(request).post())
+-   self.assertEqual(response.status,200);line=(root.parent/'logs-client/flash-diagnostics.jsonl').read_text();self.assertNotIn('PRIVATE',line);self.assertNotIn('user_id',line)
+-   self.assertEqual(json.loads(line)['active_options'],['macro','change_movement_speed'])
+- def test_remote_rejected(self):
+-  request=Request(Path('/tmp'));request.remote='192.0.2.1'
+-  with self.assertRaises(web.HTTPForbidden):asyncio.run(mod.Diagnostics(request).post())
+- def test_unauthenticated_rejected(self):
+-  request=Request(Path('/tmp'))
+-  with patch.object(mod,'authorize',AsyncMock(side_effect=web.HTTPUnauthorized())):
+-   with self.assertRaises(web.HTTPUnauthorized):asyncio.run(mod.Diagnostics(request).post())
+- def test_unknown_option_rejected(self):
+-  request=Request(Path('/tmp'),options='token-secret')
+-  with patch.object(mod,'authorize',AsyncMock(return_value={'user_id':7})):
+-   with self.assertRaises(web.HTTPBadRequest):asyncio.run(mod.Diagnostics(request).post())
+- def test_rate_limit(self):
+-  request=Request(Path('/tmp'));request.app['diagnostics_rate'][7]=(mod.time.monotonic(),30)
+-  with patch.object(mod,'authorize',AsyncMock(return_value={'user_id':7})):
+-   with self.assertRaises(web.HTTPTooManyRequests):asyncio.run(mod.Diagnostics(request).post())
+-if __name__=='__main__':unittest.main()
++from aiohttp.test_utils import TestClient, TestServer
++
++ROOT = Path(__file__).resolve().parents[1]
++package = types.ModuleType('diagnostic_test_api')
++package.__path__ = [str(ROOT / 'DisneyClient/api')]
++sys.modules[package.__name__] = package
++spec = importlib.util.spec_from_file_location('diagnostic_test_api.diagnostics', ROOT / 'DisneyClient/api/diagnostics.py')
++diagnostics = importlib.util.module_from_spec(spec)
++sys.modules[spec.name] = diagnostics
++spec.loader.exec_module(diagnostics)
++
++
++class DiagnosticsTests(unittest.IsolatedAsyncioTestCase):
++    async def asyncSetUp(self):
++        self.tmp = tempfile.TemporaryDirectory()
++        self.root = Path(self.tmp.name) / 'DisneyClient'
++        self.root.mkdir()
++
++        @web.middleware
++        async def remote(request, handler):
++            return await handler(request.clone(remote='198.51.100.23'))
++
++        async def auth(request):
++            token = request.query.get('access_token')
++            if token not in {'TEST7', 'TEST8'}:
++                raise web.HTTPUnauthorized()
++            return {'user_id': int(token[-1])}
++
++        self.auth = patch.object(diagnostics, 'authorize', auth)
++        self.auth.start()
++        self.app = web.Application(middlewares=[remote])
++        self.app['root'] = self.root
++        self.app['diagnostics_rate'] = {}
++        self.app.router.add_view('/client_diagnostics', diagnostics.Diagnostics)
++        self.client = TestClient(TestServer(self.app))
++        await self.client.start_server()
++
++    async def asyncTearDown(self):
++        await self.client.close()
++        self.auth.stop()
++        self.tmp.cleanup()
++
++    async def post(self, **values):
++        data = {'event': 'socket_close', 'channel': 'main', 'code': '0', 'elapsed': '100', 'options': 'auto_play', 'event_id': 'session_1'}
++        data.update(values)
++        return await self.client.post('/client_diagnostics?access_token=TEST7', data=data)
++
++    def records(self, name='disconnects.jsonl'):
++        path = self.root.parent / 'logs-client' / name
++        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
++
++    async def test_remote_authenticated_client_is_logged(self):
++        response = await self.post(nickname='Self#0001', map='@123', current_socket='1')
++        self.assertEqual(response.status, 200)
++        record = self.records()[0]
++        self.assertEqual(record['user_id'], 7)
++        self.assertEqual(record['client_ip'], '198.51.100.23')
++        self.assertEqual(record['nickname'], 'Self#0001')
++        self.assertEqual(record['map'], '@123')
++
++    async def test_no_auth_cannot_write_logs(self):
++        response = await self.client.post('/client_diagnostics', data={'event': 'socket_close', 'channel': 'main'})
++        self.assertEqual(response.status, 401)
++        self.assertFalse(self.records())
++
++    async def test_close_does_not_invent_game_kick_reason(self):
++        await self.post()
++        record = self.records()[0]
++        self.assertEqual(record['reason'], 'connection_closed_without_game_reason')
++        self.assertIsNone(record['game_server_reason'])
++        self.assertEqual(record['reason_source'], 'flash_event')
++
++    async def test_network_error_keeps_observed_code_and_message(self):
++        response = await self.post(event='io_error', code='2031', message='Error #2031: Socket Error.')
++        self.assertEqual(response.status, 200)
++        record = self.records()[0]
++        self.assertEqual(record['code'], 2031)
++        self.assertEqual(record['reason'], 'network_io_error')
++        self.assertEqual(record['message'], 'Error #2031: Socket Error.')
++
++    async def test_poll_disconnect_is_supported(self):
++        response = await self.post(event='socket_disconnected')
++        self.assertEqual(response.status, 200)
++        self.assertEqual(self.records()[0]['reason'], 'connection_lost_without_close_event')
++
++    async def test_replaced_socket_is_distinguished(self):
++        await self.post(channel='bulle', current_socket='0', main_connected='1')
++        record = self.records()[0]
++        self.assertFalse(record['current_socket'])
++        self.assertTrue(record['main_connected'])
++        self.assertEqual(record['channel'], 'bulle')
++
++    async def test_credentials_and_urls_are_redacted(self):
++        await self.post(message='URL http://example.test/?access_token=SECRET password=HIDDEN\nError #2031', robot_status='flash_token=PRIVATE')
++        text = json.dumps(self.records())
++        for secret in ('SECRET', 'HIDDEN', 'PRIVATE', 'http://example.test'):
++            self.assertNotIn(secret, text)
++        self.assertIn('[redacted]', text)
++
++    async def test_event_retry_is_deduplicated(self):
++        await self.post()
++        response = await self.post()
++        self.assertTrue((await response.json())['duplicate'])
++        self.assertEqual(len(self.records()), 1)
++        self.assertEqual(len(self.records('flash-diagnostics.jsonl')), 1)
++
++    async def test_event_ids_are_scoped_to_authenticated_user(self):
++        await self.post(user_id='999')
++        await self.client.post('/client_diagnostics?access_token=TEST8', data={'event': 'socket_close', 'channel': 'main', 'event_id': 'session_1'})
++        self.assertEqual([record['user_id'] for record in self.records()], [7, 8])
++
++    async def test_frame_error_is_not_classified_as_disconnect(self):
++        response = await self.post(event='frame_error', channel='client', code='1069', message='Missing native property')
++        self.assertEqual(response.status, 200)
++        self.assertFalse(self.records())
++        self.assertEqual(self.records('flash-diagnostics.jsonl')[0]['code'], 1069)
++
++    async def test_old_guard_payload_remains_compatible(self):
++        response = await self.client.post('/client_diagnostics?access_token=TEST7', data={'event': 'guard_ready', 'channel': 'client', 'code': '0', 'elapsed': '10', 'options': ''})
++        self.assertEqual(response.status, 200)
++        self.assertEqual(self.records('flash-diagnostics.jsonl')[0]['event'], 'guard_ready')
++
++    async def test_invalid_metadata_is_rejected(self):
++        for values in ({'event': 'invented_kick'}, {'channel': '../main'}, {'code': '999999'}, {'map': '../../private'}, {'current_socket': 'yes'}, {'event_id': '../file'}, {'options': 'unrecognized'}):
++            response = await self.post(**values)
++            self.assertEqual(response.status, 400, values)
++        self.assertFalse(self.records())
++
++    async def test_payload_limit(self):
++        response = await self.post(message='x' * 20000)
++        self.assertEqual(response.status, 413)
++
++    async def test_rate_limit_keeps_log_bounded(self):
++        for index in range(120):
++            response = await self.post(event_id='rate_' + str(index))
++            self.assertEqual(response.status, 200)
++        self.assertEqual((await self.post(event_id='rate_over')).status, 429)
++        self.assertEqual(len(self.records()), 120)
++
++    async def test_rotation_preserves_previous_log(self):
++        target = self.root.parent / 'logs-client' / 'disconnects.jsonl'
++        target.parent.mkdir()
++        target.write_bytes(b'x' * (5 * 1024 * 1024 + 1))
++        await self.post()
++        self.assertTrue(target.with_name('disconnects.previous.jsonl').is_file())
++        self.assertEqual(len(self.records()), 1)
++
++
++if __name__ == '__main__':
++    unittest.main()
+--- a/fontes-follow/FollowControllerV13.as
++++ b/fontes-follow/FollowControllerV13.as
+@@ -88,12 +88,7 @@
+     if(!isFinite(x) || !isFinite(y))throw new Error("Coordenadas indisponiveis");
+     var targetJump:Boolean=false;
+     if(k.is_jumping && found.hasOwnProperty(String(k.is_jumping)) && found[k.is_jumping] is Boolean)targetJump=Boolean(found[k.is_jumping]);
+-    if(needsSync){
+-     
+-     if(!k.packet_handler_class || !k.packet_handler || !(k.packet_handler_class[k.packet_handler] is Function))throw new Error("Teleport nativo indisponivel",2206);
+-     k.packet_handler_class[k.packet_handler](LegacyOptionsV5.encodePosition(Math.round(x),Math.round(y)));
+-    }
+-    // Initial sync uses the visible position; subsequent moves use wire coordinates.
++    // Automatic position synchronization removed; native keys only.
+     needsSync=false;
+     var dx:Number=x-Number(local.x);
+     var goLeft:Boolean=dx < -4;var goRight:Boolean=dx > 4;
+@@ -106,7 +101,7 @@
+      goLeft=live.left;goRight=live.right;targetJump=live.jump;
+     }
+     motion.followSample(this,goLeft,goRight,targetJump,x,y);
+-    notice("Follow v13: coordenadas da v3 | "+targetName+(k.is_jumping ? "" : " | pulo do alvo indisponivel"));
++    notice("Follow v13: teclas internas | "+targetName+(k.is_jumping ? "" : " | pulo do alvo indisponivel"));
+
+    }catch(error:Error){release();retryAt=now+500;notice("Follow: aguardando sincronizacao #"+error.errorID);}
+   }
+--- a/fontes-followautobest/AutoBestTests.as
++++ b/fontes-followautobest/AutoBestTests.as
+@@ -12,7 +12,7 @@
+    var observed:int=0;NativeMotion.get(r).observeWith(function(bytes:ByteArray):void{observed++;});var best:FollowAutoBest=new FollowAutoBest(r);var opaque:ByteArray=new ByteArray();opaque.writeByte(99);opaque.writeByte(99);opaque.position=0;NativeMotion.observe(r,opaque);check(observed==1,"managed replay does not replace the existing Robot packet observer");var jumpDowns:int=0;r.stage.addEventListener(KeyboardEvent.KEY_DOWN,function(e:KeyboardEvent):void{if(e.keyCode==38)jumpDowns++;});check(!best.enabled,"starts disabled");best.toggle();best.tick(0);check(best.enabled,"toggle enables persistent mode");
+    best.packet(profile("Alpha#0001",50),10);best.packet(profile("Beta#0001",150),10);best.packet(profile("Idle#0001",10000),10);best.packet(profile("Self#0001",99999),10);
+    best.packet(move(10),20);best.packet(move(11),20);best.packet(move(7),20);best.tick(500);check(best.targetName=="beta#0001","highest real firsts among moving nonlocal players; idle high firsts ignored");check(placements==0,"records first without moving local player");
+-   best.packet(move(11,110,100,true),550);best.packet(marker(144,6,10),600);best.packet(marker(8,6,10),650);check(best.phase=="observando","other player's cheese and win do not complete selected route");best.packet(marker(144,6,11),650);best.packet(move(11,120),700);best.packet(marker(8,6,11),800);check(best.phase=="pronto","selected cheese and actual victory complete recording");map.container.reverse=true;r.auto_play=true;best.tick(800);check(best.phase=="pronto" && placements==0,"manual Robot prevents automatic replay from competing for movement");r.auto_play=false;best.tick(800);check(best.phase=="reproduzindo" && !r.auto_play,"managed replay starts without activating legacy/global Robot");check(placements==0,"initial release wait respected");best.tick(1100);check(placements==1 && Math.abs(self.x-30)<0.001,"replay uses actual room coordinates once, even on mirrored maps");best.tick(1150);check(placements==2 && self.x==33,"recorded 50ms movement delay respected");check(jumpDowns>0,"recorded jump uses actual native key input");best.tick(1200);best.tick(1250);check(placements==2 && best.message.indexOf("queijo nativo")>=0,"replay waits for actual local cheese instead of assuming recorded marker succeeded");best.packet(marker(144,6,7),1250);best.tick(1250);best.tick(1300);check(placements==3 && self.x==36,"cheese marker does not invent movement or skip next sample");best.tick(1400);check(best.message.indexOf("confirmacao")>=0,"hole waits for native confirmation");var before:int=placements;best.tick(1500);check(placements==before,"no pose writes while waiting in hole");best.packet(marker(8,6,7),1550);check(best.phase=="aguardando renascer" && best.enabled,"local victory releases replay but leaves mode enabled");best.packet(marker(144,2,99),1600);check(best.phase=="aguardando renascer","other respawn ignored");best.packet(marker(144,2,7),1700);check(best.phase=="observando" && best.enabled,"own respawn starts new search without disabling");
++   best.packet(move(11,110,100,true),550);best.packet(marker(144,6,10),600);best.packet(marker(8,6,10),650);check(best.phase=="observando","other player's cheese and win do not complete selected route");best.packet(marker(144,6,11),650);best.packet(move(11,120),700);best.packet(marker(8,6,11),800);check(best.phase=="pronto","selected cheese and actual victory complete recording");map.container.reverse=true;r.auto_play=true;best.tick(800);check(best.phase=="pronto" && placements==0,"manual Robot prevents automatic replay from competing for movement");r.auto_play=false;best.tick(800);check(best.phase=="reproduzindo" && !r.auto_play,"managed replay starts without activating legacy/global Robot");check(placements==0,"replay never assigns an initial pose");best.tick(1100);check(placements==0 && Math.abs(self.x-30)<0.001,"replay uses native keys in actual room coordinates even on mirrored maps");self.x=33;best.tick(1150);check(placements==0 && self.x==33,"next physical sample is accepted without assigning its position");check(jumpDowns>0,"recorded jump uses actual native key input");best.tick(1200);best.tick(1250);check(placements==0 && best.message.indexOf("ponto 4/5")>=0,"spatial replay waits for next physical point rather than a timed cheese marker");best.packet(marker(144,6,7),1250);best.tick(1250);self.x=36;best.tick(1300);check(placements==0 && self.x==36,"cheese marker does not invent movement or skip next sample");best.tick(1400);check(best.message.indexOf("confirmacao")>=0,"hole waits for native confirmation");var before:int=placements;best.tick(1500);check(placements==before,"no pose writes while waiting in hole");best.packet(marker(8,6,7),1550);check(best.phase=="aguardando renascer" && best.enabled,"local victory releases replay but leaves mode enabled");best.packet(marker(144,2,99),1600);check(best.phase=="aguardando renascer","other respawn ignored");best.packet(marker(144,2,7),1700);check(best.phase=="observando" && best.enabled,"own respawn starts new search without disabling");
+    best.packet(move(10),1800);best.packet(move(11),1800);best.tick(2000);delete r.tfm.players[11];best.tick(2500);check(best.targetName=="alpha#0001" && best.enabled,"leaving target automatically replaced");a.dead=true;best.tick(3000);check(best.targetName=="" && best.enabled,"dead target removed while mode keeps searching");a.dead=false;best.packet(move(10),3100);best.tick(3500);best.packet(marker(8,6,10),3600);check(best.phase=="observando" && best.message.indexOf("parcial")>=0,"partial route without cheese never plays a hole-only shortcut");
+    r.current_round_code=2;best.tick(4000);check(best.targetName=="" && best.enabled,"new round clears old route but keeps command armed");best.toggle();check(!best.enabled && !NativeMotion.get(r).inputBusy(),"second command disables and releases keys");
+    var unknown:Object={id:13,nick:"New#0001",dead:false,clip:true};r.tfm.players={"7":self,"13":unknown};best.toggle();best.tick(5000);best.packet(move(13),5100);best.tick(5500);check(requests.length==1 && requests[0].cipher,"profile requests use native packet and cipher");requests[0].data.position=0;check(requests[0].c==6 && requests[0].cc==26 && requests[0].data.readUTF()=="profile New#0001","profile query format verified");best.tick(6000);check(requests.length==1,"no burst of profile requests while pending");check(best.packet(profile("New#0001",250),6100),"only matching pending profile is consumed to avoid popup");check(!best.packet(profile("Other#0001",500),6200),"unrelated manual profiles continue to native UI");best.tick(6500);check(best.targetName=="new#0001","new active player selected after actual profile response");
+@@ -21,7 +21,7 @@
+    var bytes:ByteArray=profile("Manual#0001",1);bytes.position=1;var original:ByteArray=new ByteArray();original.writeBytes(bytes);check(!FollowAutoBest.receive(r,bytes) && bytes.position==1 && bytes.length==original.length,"observer preserves cursor and native manual profile delivery");
+    var malformed:ByteArray=new ByteArray();malformed.writeByte(8);malformed.writeByte(16);malformed.writeByte(255);malformed.position=1;check(!FollowAutoBest.receive(r,malformed) && malformed.position==1,"malformed profile stays on native path with cursor restored");
+    input.text="/followautobest";r.stage.focus=input;r.stage.dispatchEvent(new KeyboardEvent(KeyboardEvent.KEY_DOWN,true,false,0,13));check(input.text=="","same command toggles off even when keyboard event targets Stage");
+-   r.tfm.players={"7":self,"10":a};r.current_round_code=3;self.x=30;self.y=30;a.dead=false;best.toggle();best.tick(20000);best.packet(profile("Alpha#0001",50),20000);best.packet(move(10),20020);best.tick(20500);best.packet(marker(144,6,10),20550);best.packet(move(10,110),20600);best.packet(marker(8,6,10),20700);best.tick(20700);best.tick(21000);best.tick(21050);best.tick(22600);check(best.enabled && best.phase=="observando" && best.message.indexOf("queijo nao confirmado")>=0 && !NativeMotion.get(r).inputBusy(),"missing actual cheese times out safely, releases keys and keeps auto search armed");best.toggle();
++   r.tfm.players={"7":self,"10":a};r.current_round_code=3;self.x=30;self.y=30;a.dead=false;best.toggle();best.tick(20000);best.packet(profile("Alpha#0001",50),20000);best.packet(move(10),20020);best.tick(20500);best.packet(marker(144,6,10),20550);best.packet(move(10,110),20600);best.packet(marker(8,6,10),20700);best.tick(20700);best.tick(21000);best.tick(21050);best.tick(21450);best.tick(21850);best.tick(22250);best.tick(22600);check(best.enabled && best.phase=="reproduzindo" && best.message.indexOf("ponto ")>=0,"spatial replay remains at unreached point without an artificial cheese timer");best.toggle();
+    ExternalInterface.call("recordTest","PASS: "+n+" AutoBest ranking, recording, replay and command checks");
+   }catch(e:Error){ExternalInterface.call("recordTest","FAIL: AutoBest checks="+n+" "+e.message+" #"+e.errorID+" "+e.getStackTrace());}}
+  }
+--- a/fontes-interface/InterfaceTests.as
++++ b/fontes-interface/InterfaceTests.as
+@@ -16,8 +16,8 @@
+    var writer:Object=r.Keys.chat_class2;var queued:int=messages.length;r.Keys.chat_class2=null;LocalServerLog.emit(r,"Evento aguardando o chat");check(messages.length==queued,"logs wait until the native SERVER writer is ready");r.Keys.chat_class2=writer;LocalServerLog.emit(r,"Evento pronto");check(messages.length==queued+2 && String(messages[queued]).indexOf("aguardando")>=0,"queued logs flush in order without network fallback");
+    var ui:Object={menu_ui:null,options_ui:new Sprite(),general_ui:new Sprite(),farm_ui:new Sprite(),bot_ui:new Sprite(),keys_ui:new Sprite(),settings_ui:new Sprite(),last_tab:"general"};r.Interface=ui;ui.general_ui.addChild(field("Jogador"));ui.farm_ui.addChild(field("Farm"));ui.bot_ui.addChild(field("Robot"));ui.keys_ui.addChild(field("Atalhos"));ui.settings_ui.addChild(field("Ajustes"));ui.change_menu_tab=function(id:String):void{ui.last_tab=id;while(ui.options_ui.numChildren)ui.options_ui.removeChildAt(0);ui.options_ui.addChild(ui[id=="general"?"general_ui":id=="farm"?"farm_ui":id=="bot"?"bot_ui":id=="keyboard"?"keys_ui":"settings_ui"]);};
+    MenuShell.attach(r);var panel:Sprite=ui.menu_ui;check(panel!=null && panel.parent!=null,"new menu builds using existing native interface");check(nav(panel,"Follow")!=null,"Follow section appears in navigation");nav(panel,"Follow").dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));check(ui.last_tab=="follow" && find(panel,"astroFollowPlayers")!=null,"Follow opens Players tab inside existing options viewport");var players:FollowPlayersPanel=FollowPlayersPanel.get(r);players.refresh();var list:DisplayObjectContainer=find(panel,"astroPlayerList") as DisplayObjectContainer;check(list!=null && find(list,"astroPlayer_1:Self#0001")!=null && find(list,"astroPlayer_4:Beta#0003")!=null,"room list includes self and dead players");var follow:Sprite=find(panel,"astroFollowSelected") as Sprite;check(!follow.mouseEnabled,"follow button disabled before selection");
+-   find(list,"astroPlayer_1:Self#0001").dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));check(!follow.mouseEnabled,"cannot follow yourself");find(list,"astroPlayer_2:Alpha#0002").dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));check(follow.mouseEnabled,"selecting another player enables Follow");follow.dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));r.stage.dispatchEvent(new Event(Event.ENTER_FRAME));check(nativeJoin==1 && placements>0 && self.x==120,"button invokes existing functional Follow without typing a command");check(String(messages[messages.length-1]).indexOf("Follow ativado: Alpha#0002")>=0,"following selected player emits native SERVER log");find(panel,"astroStopFollow").dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));check(!self.right && String(messages[messages.length-1]).indexOf("Follow desativado")>=0,"Stop releases movement and logs deactivation");
+-   find(list,"astroPlayer_3:*Souris_25").dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));follow.dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));r.stage.dispatchEvent(new Event(Event.ENTER_FRAME));check(self.x==160 && nativeJoin==2,"guest nickname can be selected without inventing a hashtag");FollowControllerV13Shared.stopSelected(r);
++   find(list,"astroPlayer_1:Self#0001").dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));check(!follow.mouseEnabled,"cannot follow yourself");find(list,"astroPlayer_2:Alpha#0002").dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));check(follow.mouseEnabled,"selecting another player enables Follow");follow.dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));r.stage.dispatchEvent(new Event(Event.ENTER_FRAME));check(nativeJoin==0 && placements==0 && self.x==10 && self.y==20 && self.right,"button invokes native-key Follow without typing or teleporting");check(String(messages[messages.length-1]).indexOf("Follow ativado: Alpha#0002")>=0,"following selected player emits native SERVER log");find(panel,"astroStopFollow").dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));check(!self.right && String(messages[messages.length-1]).indexOf("Follow desativado")>=0,"Stop releases movement and logs deactivation");
++   find(list,"astroPlayer_3:*Souris_25").dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));follow.dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));r.stage.dispatchEvent(new Event(Event.ENTER_FRAME));check(self.x==10 && self.y==20 && self.right && placements==0 && nativeJoin==0,"guest selection steers with native keys without teleport or sync packet");FollowControllerV13Shared.stopSelected(r);
+    var search:TextField=find(panel,"astroPlayerSearch") as TextField;search.text="alpha";search.dispatchEvent(new Event(Event.CHANGE));check(find(list,"astroPlayer_2:Alpha#0002")!=null && find(list,"astroPlayer_3:*Souris_25")==null,"search filters room list");search.text="";search.dispatchEvent(new Event(Event.CHANGE));find(list,"astroPlayer_2:Alpha#0002").dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));delete r.tfm.people[2];players.refresh();check(!follow.mouseEnabled && find(list,"astroPlayer_2:Alpha#0002")==null,"departed player removed and selection disabled");check(!FollowControllerV13Shared.selectPlayer(r,other),"stale room object rejected instead of following wrong ID");
+    for(var i:int=5;i<20;i++)r.tfm.people[i]={id:i,nick:"Player"+i+"#0001",x:0,y:0,dead:false};players.refresh();list.dispatchEvent(new MouseEvent(MouseEvent.MOUSE_WHEEL,true,false,0,0,null,false,false,false,false,-3));check(Sprite(list).scrollRect.y>0,"players list scrolls with mouse wheel");var outer:Sprite=ui.options_ui.parent as Sprite;check(outer.scrollRect.y==0,"inner player scrolling does not move outer form");
+    MenuShell.setOpacity(r,0.72);check(Math.abs(panel.alpha-0.72)<0.01 && r.alpha==1,"opacity applies to menu only");MenuShell.setOpacity(r,0);check(Math.abs(panel.alpha-0.65)<0.01,"opacity remains readable and selectable");MenuShell.setOpacity(r,2);check(panel.alpha==1,"opacity maximum is clamped");check(find(panel,"astroOpacityTrack")!=null,"visible opacity control exists");nav(panel,"Jogador").dispatchEvent(new MouseEvent(MouseEvent.CLICK,true));check(ui.last_tab=="general" && ui.options_ui.contains(ui.general_ui),"native tabs remain usable after Players");
+--- /dev/null
++++ b/fontes-robot/ConnectionDiagnostics.as
+@@ -0,0 +1,149 @@
++package disney {
++ import flash.display.MovieClip;
++ import flash.events.*;
++ import flash.net.*;
++ import flash.text.*;
++ import flash.utils.*;
++
++ // Observes existing sockets only. Never closes, delays, replaces or writes them.
++ public class ConnectionDiagnostics {
++  private static var instances:Dictionary=new Dictionary(true);
++  private var root:MovieClip;
++  private var status:TextField;
++  private var seen:Dictionary=new Dictionary(true);
++  private var channels:Object={};
++  private var faults:Object={};
++  private var queue:Array=[];
++  private var loader:URLLoader;
++  private var sentAt:int=0;
++  private var scanAt:int=0;
++  private var counter:uint=0;
++  private var client:String;
++  private var last:Object;
++  public function ConnectionDiagnostics(value:MovieClip){root=value;client="flash_"+getTimer()+"_"+uint(Math.random()*4294967295).toString(16);}
++  private static function read(o:Object,key:*):*{try{if(o && key!=null && key in o)return o[key];}catch(ignored:Error){}return null;}
++  public static function lastEvent(value:MovieClip):Object{var d:ConnectionDiagnostics=instances[value] as ConnectionDiagnostics;return d ? d.last : null;}
++  public static function pending(value:MovieClip):int{var d:ConnectionDiagnostics=instances[value] as ConnectionDiagnostics;return d ? d.queue.length : 0;}
++  public static function attach(value:MovieClip):void{
++   if(!value || !value.stage || instances[value])return;
++   var d:ConnectionDiagnostics=new ConnectionDiagnostics(value);instances[value]=d;
++   d.status=new TextField();d.status.name="sddsConnectionStatus";
++   d.status.defaultTextFormat=new TextFormat("_sans",11,0xD5E2F4);d.status.background=true;d.status.backgroundColor=0x182235;d.status.height=24;d.status.selectable=true;d.status.mouseEnabled=false;
++   d.status.text="Rede nativa | logs de conexao na VPS";value.stage.addChild(d.status);d.fit();
++   value.stage.addEventListener(Event.RESIZE,function(e:Event):void{d.fit();});
++   var nativeLoop:Function=read(value,"loop_game") as Function;
++   if(nativeLoop!=null)value.stage.removeEventListener(Event.ENTER_FRAME,nativeLoop);
++   value.stage.addEventListener(Event.ENTER_FRAME,function(e:Event):void{
++    try{if(nativeLoop!=null)nativeLoop.apply(value,[e]);}
++    catch(error:Error){
++     d.status.text="Falha do client #"+error.errorID+" | "+String(error.message).substr(0,180);
++     var now:int=getTimer();var key:String=String(error.errorID);
++     if(!(key in d.faults) || now-Number(d.faults[key])>=30000){d.faults[key]=now;d.report("frame_error",error.errorID,"client",error.message,false);}
++    }
++    d.tick();
++   });
++   d.scan();d.report("guard_ready",0,"client","",false);
++  }
++  private function fit():void{if(!root.stage)return;status.x=8;status.y=Math.max(40,root.stage.stageHeight-28);status.width=Math.max(240,root.stage.stageWidth-16);}
++  private function auth():String{
++   var settings:Object=read(root,"tfmdisney");var data:Object=read(settings,"data");
++   var access:* =read(root,"access_token");var flash:* =read(data,"flash_token");
++   if(!access || !flash)return "";
++   return "access_token="+encodeURIComponent(String(access))+"&flash_token="+encodeURIComponent(String(flash));
++  }
++  private static function clean(value:String):String{
++   value=String(value || "");
++   value=value.replace(/https?:\/\/[^\s<>]+/gi,"[url]");
++   return value.replace(/((?:access_token|flash_token|password|authorization)\s*[:=]\s*)[^\s,;]+/gi,"$1[redacted]");
++  }
++  private function nativeSocket(channel:String):Socket{
++   var k:Object=read(root,"Keys");var cls:Object=read(k,"socket_class");
++   var wrapper:Object=read(cls,read(k,channel=="main" ? "main_socket_instance" : "bulle_socket_instance"));
++   if(wrapper is Socket)return wrapper as Socket;
++   var actual:Object=read(wrapper,read(k,"socket_name"));
++   return actual is Socket ? actual as Socket : channels[channel] as Socket;
++  }
++  private function report(kind:String,code:int,channel:String,message:String,current:Boolean):void{
++   var options:Array=[];
++   for each(var name:String in ["auto_play","recording","change_jump_delay","change_jump_height","change_jump_speed","change_movement_speed","mass_reduction","insta_death","insta_win","no_delay","no_bulle","soft_mode","macro"])if(read(root,name))options.push(name);
++   var ui:Object=read(root,"Interface");var field:Object=read(ui,"status_field");
++   var map:String=String(read(root,"current_map_code") || "");if(!/^@[0-9]{1,12}$/.test(map))map="";
++   var k:Object=read(root,"Keys");var player:Object=read(read(root,"tfm"),read(k,"player"));
++   var nickname:String=clean(String(read(player,read(k,"player_name")) || "")).substr(0,60);
++   var payload:Object={nickname:nickname,event:kind,code:code,channel:channel,elapsed:getTimer(),options:options.join(","),client_id:client,event_id:client+"_"+(++counter),build:"native-diagnostics-v2",map:map,robot_status:clean(String(read(field,"text") || "")).substr(0,220),message:clean(message).substr(0,1000),current_socket:current ? "1" : "0"};
++   var main:Socket=nativeSocket("main");payload.main_connected=main && main.connected ? "1" : "0";
++   last=payload;
++   // A connection event without a session must not be attributed to a future login.
++   if(auth()=="" && kind!="guard_ready")return;
++   if(queue.length>=16)queue.splice(loader ? 1 : 0,1);
++   queue.push({payload:payload,attempts:0,retry:0,auth:auth()});pump();
++  }
++  private function finish(current:URLLoader,success:Boolean,statusCode:int):void{
++   if(loader!==current)return;loader=null;
++   if(queue.length){
++    var item:Object=queue[0];
++    if(success || statusCode==401 || statusCode==403 || item.attempts>=3)queue.shift();
++    else item.retry=getTimer()+(statusCode==429 ? 30000 : 5000);
++   }
++  }
++  private function pump():void{
++   if(loader || !queue.length)return;
++   var item:Object=queue[0];if(getTimer()<Number(item.retry))return;
++   var credentials:String=String(item.auth || "");if(credentials=="")credentials=auth();if(credentials=="")return;
++   // Retry under the original session identity; never assign its event to a new login.
++   item.auth=credentials;item.attempts++;
++   var variables:URLVariables=new URLVariables();for(var key:String in item.payload)variables[key]=item.payload[key];
++   var host:String=String(read(root,"host_url") || "");if(host!="" && host.charAt(host.length-1)!="/")host+="/";
++   var request:URLRequest=new URLRequest(host+"client_diagnostics?"+credentials);request.method=URLRequestMethod.POST;request.data=variables;
++   var current:URLLoader=new URLLoader();loader=current;sentAt=getTimer();var statusCode:int=0;
++   current.addEventListener(HTTPStatusEvent.HTTP_STATUS,function(e:HTTPStatusEvent):void{statusCode=e.status;});
++   current.addEventListener(Event.COMPLETE,function(e:Event):void{finish(current,statusCode<400,statusCode);});
++   var fail:Function=function(e:Event):void{finish(current,false,statusCode);};
++   current.addEventListener(IOErrorEvent.IO_ERROR,fail);current.addEventListener(SecurityErrorEvent.SECURITY_ERROR,fail);
++   try{current.load(request);}catch(ignored:Error){finish(current,false,statusCode);}
++  }
++  private function errorCode(e:Event):int{
++   var value:* =read(e,"errorID");if(value!=null)return int(value);
++   var match:Object=/#([0-9]+)/.exec(String(read(e,"text") || ""));return match ? int(match[1]) : 0;
++  }
++  private function bind(socket:Socket,channel:String):void{
++   channels[channel]=socket;if(seen[socket])return;
++   var state:Object={was:socket.connected,closed:false,channel:channel};seen[socket]=state;
++   socket.addEventListener(Event.CONNECT,function(e:Event):void{state.was=true;state.closed=false;});
++   socket.addEventListener(Event.CLOSE,function(e:Event):void{
++    state.closed=true;status.text="Socket "+channel+" encerrado | motivo nao informado pelo jogo";
++    report("socket_close",0,channel,"",nativeSocket(channel)===socket);
++   });
++   socket.addEventListener(IOErrorEvent.IO_ERROR,function(e:IOErrorEvent):void{
++    status.text="Erro de rede "+channel+" #"+errorCode(e);report("io_error",errorCode(e),channel,e.text,nativeSocket(channel)===socket);
++   });
++   socket.addEventListener(SecurityErrorEvent.SECURITY_ERROR,function(e:SecurityErrorEvent):void{
++    status.text="Erro de seguranca "+channel+" #"+errorCode(e);report("security_error",errorCode(e),channel,e.text,nativeSocket(channel)===socket);
++   });
++  }
++  private function observe(wrapper:Object,channel:String,k:Object):void{
++   if(!wrapper)return;
++   if(wrapper is Socket){bind(wrapper as Socket,channel);return;}
++   var direct:Object=read(wrapper,read(k,"socket_name"));
++   if(direct is Socket){bind(direct as Socket,channel);return;}
++   try{
++    var description:XML=describeType(wrapper);
++    for each(var variable:XML in description.variable){var value:Object=read(wrapper,String(variable.@name));if(value is Socket)bind(value as Socket,channel);}
++    for each(var accessor:XML in description.accessor){if(String(accessor.@access)=="writeonly")continue;value=read(wrapper,String(accessor.@name));if(value is Socket)bind(value as Socket,channel);}
++   }catch(ignored:Error){}
++  }
++  private function scan():void{
++   var k:Object=read(root,"Keys");var cls:Object=read(k,"socket_class");
++   observe(read(cls,read(k,"main_socket_instance")),"main",k);observe(read(cls,read(k,"bulle_socket_instance")),"bulle",k);
++   for(var socket:Object in seen){var state:Object=seen[socket];var nativeSocket:Socket=socket as Socket;
++    if(state.was && !nativeSocket.connected && !state.closed){state.closed=true;report("socket_disconnected",0,state.channel,"",this.nativeSocket(state.channel)===nativeSocket);}
++    state.was=nativeSocket.connected;
++   }
++  }
++  private function tick():void{
++   var now:int=getTimer();if(now>=scanAt){scanAt=now+1000;try{scan();}catch(ignored:Error){}}
++   if(loader && now-sentAt>15000){var old:URLLoader=loader;try{old.close();}catch(ignoredClose:Error){}finish(old,false,0);}
++   pump();
++  }
++ }
++}
+--- a/fontes-robot/FollowControllerV13Shared.as
++++ b/fontes-robot/FollowControllerV13Shared.as
+@@ -88,12 +88,7 @@
+     if(!isFinite(x) || !isFinite(y))throw new Error("Coordenadas indisponiveis");
+     var targetJump:Boolean=false;
+     if(k.is_jumping && found.hasOwnProperty(String(k.is_jumping)) && found[k.is_jumping] is Boolean)targetJump=Boolean(found[k.is_jumping]);
+-    if(needsSync){
+-     
+-     if(!k.packet_handler_class || !k.packet_handler || !(k.packet_handler_class[k.packet_handler] is Function))throw new Error("Teleport nativo indisponivel",2206);
+-     k.packet_handler_class[k.packet_handler](LegacyOptionsV5.encodePosition(Math.round(x),Math.round(y)));
+-    }
+-    // Initial sync uses the visible position; subsequent moves use wire coordinates.
++    // Automatic position synchronization removed; native keys only.
+     needsSync=false;
+     var dx:Number=x-Number(local.x);
+     var goLeft:Boolean=dx < -4;var goRight:Boolean=dx > 4;
+@@ -106,7 +101,7 @@
+      goLeft=live.left;goRight=live.right;targetJump=live.jump;
+     }
+     motion.followSample(this,goLeft,goRight,targetJump,x,y);
+-    notice("Follow v13: coordenadas da v3 | "+targetName+(k.is_jumping ? "" : " | pulo do alvo indisponivel"));
++    notice("Follow v13: teclas internas | "+targetName+(k.is_jumping ? "" : " | pulo do alvo indisponivel"));
+
+    }catch(error:Error){release();retryAt=now+500;notice("Follow: aguardando sincronizacao #"+error.errorID);}
+   }
+--- a/fontes-robot/FollowRegressionTests.as
++++ b/fontes-robot/FollowRegressionTests.as
+@@ -1,42 +1,29 @@
+-// ActionScript 3 / FollowTests.as / Ruffle AVM2 / live position, velocity, wall-jump trajectory and cancellation checks
+ package disney {
+- import flash.display.MovieClip;import flash.display.Sprite;import flash.utils.ByteArray;import flash.events.KeyboardEvent;import flash.text.TextField;import flash.external.ExternalInterface;import flash.geom.Point;
++ import flash.display.MovieClip;import flash.events.KeyboardEvent;import flash.utils.ByteArray;import flash.external.ExternalInterface;import flash.text.TextField;import flash.geom.Point;
+  public class RgbMouseTests {
+-  private static var count:int=0;private static function check(ok:Boolean,name:String):void{if(!ok)throw new Error(name);count++;}
++  private static var count:int=0;
++  private static function check(ok:Boolean,name:String):void{if(!ok)throw new Error(name);count++;}
+   public static function run(display:MovieClip):void{
+    var result:String;
+    try{
+-    var r:MovieClip=new MovieClip();display.addChild(r);r.stage.focus=r.stage;var pressed:Object={};r.stage.addEventListener(KeyboardEvent.KEY_DOWN,function(e:KeyboardEvent):void{pressed[e.keyCode]=true;});r.stage.addEventListener(KeyboardEvent.KEY_UP,function(e:KeyboardEvent):void{pressed[e.keyCode]=false;});
+-    var teleports:int=0;var lastPacket:ByteArray;var placements:Array=[];var body:Object={velocity:{vx:0,vy:0},place:function(p:Point,a:Number):Boolean{placements.push(p);return true;}};
+-    var local:Object={nick:"Self#0001",x:0,y:0,dead:false,body:body,down:false,side:false};var target:Object={nick:"Target#0000",x:345,y:180,dead:false,jumpActive:false,left:false,right:true,down:false,body:{velocity:{vx:3,vy:0}}};
+-    local.crouch=function(side:Boolean):void{};local.stand=function(side:Boolean):void{};
+-    r["Keys"]={is_jumping:"jumpActive",packet_handler_class:{receive:function(bytes:ByteArray):void{teleports++;lastPacket=bytes;}},packet_handler:"receive",map_class:{current:{number:{code:1}}},map_instance:"current",bot_map_code_object:"number",bot_map_code_value:"code",player:"self",player_list:"players",player_name:"nick",is_dead:"dead",player_physics:"body",bot_set_position:"place",physics_state:"velocity",physics_state_vx:"vx",physics_state_vy:"vy",app_domain:{applicationDomain:{getDefinition:function(n:String):Class{return Point;}}},b2vec2:"Point",player_moving_left:"left",player_moving_right:"right",is_down:"down",crouch:"crouch",crouch2:"stand",static_side:"side"};
+-    r["tfm"]={self:local,players:[{nick:"Target#0002",x:0,y:0},target]};r["auto_play"]=true;
+-    var follow:FollowControllerV13Shared=new FollowControllerV13Shared(r);check(!follow.command("/room abc"),"other commands unaffected");follow.command("/follow target#0000");follow.update(0);
+-    check(local.x==345 && local.y==180,"immediate exact target position");check(teleports==1 && lastPacket.readUnsignedByte()==8 && lastPacket.readUnsignedByte()==3,"initial native teleport applied");check(placements.length==1 && placements[0].x==11.5 && placements[0].y==6,"native physics coordinates scaled correctly");check(body.velocity.vx==0 && body.velocity.vy==0 && pressed[39],"coordinates do not overwrite velocity");check(!r.auto_play,"autoplay disabled");
+-    target.jumpActive=true;target.x=350;target.y=160;target.body.velocity.vx=-2;target.body.velocity.vy=-5;target.right=false;target.left=true;follow.update(20);check(local.x==350 && local.y==160 && pressed[37] && !pressed[39] && pressed[38],"live wall jump direction and rising trajectory");
+-    target.x=344;target.y=140;target.body.velocity.vx=2;target.right=true;target.left=false;follow.update(40);check(local.x==344 && local.y==140 && pressed[39] && !pressed[37],"wall jump reversal follows latest state without replay");
+-    target.jumpActive=false;target.body.velocity.vy=4;target.y=145;follow.update(60);check(!pressed[38] && body.velocity.vy==0,"native jump state releases without velocity writes");
+-    var input:TextField=new TextField();input.type="input";r.addChild(input);r.stage.focus=input;var before:int=placements.length;follow.update(100);check(placements.length==before && !pressed[39],"typing pauses synchronization");r.stage.focus=r.stage;
+-    local.dead=true;follow.update(120);check(placements.length==before,"death pauses synchronization");local.dead=false;target.x=500;follow.update(140);check(local.x==500,"respawn resynchronizes immediately");r.tfm.players=[];follow.update(160);check(!pressed[39],"absent target releases control");r.tfm.players=[target];target.x=600;follow.update(180);check(local.x==600,"returning target reacquired");
+-    follow.command("/follow off");target.x=700;follow.update(200);check(local.x==600 && !pressed[39],"off stops position and keys");follow.command("/follow Self#0001");follow.update(220);check(local.x==600,"self rejected");follow.command("/follow Target");follow.update(240);check(local.x==600,"discriminator required");
+-    follow.command("/follow Target#0000");body.place=function(p:Point,a:Number):Boolean{return false;};follow.update(260);check(local.x==600 && !pressed[39],"locked physics stops without visual-only teleport");
+-    body.place=function(p:Point,a:Number):Boolean{placements.push(p);return true;};follow.update(800);check(local.x==700 && teleports>=2,"temporary locked physics retries without clearing target");
+-    var initial:int=teleports;follow.update(820);check(teleports==initial,"initial teleport not resent each frame");
+-    r.Keys.map_class.current={number:{code:2}};target.x=800;follow.update(840);check(teleports==initial+1 && local.x==800,"new round synchronizes again");
+-    local.body=null;follow.update(860);target.x=900;local.body=body;follow.update(880);check(local.x==900 && teleports==initial+2,"body unavailable during spawn resumes automatically");
+-    var localSpace:Sprite=new Sprite();localSpace.x=50;localSpace.y=70;localSpace.scaleX=2;localSpace.scaleY=2;r.addChild(localSpace);
+-    var targetSpace:Sprite=new Sprite();targetSpace.x=250;targetSpace.y=170;r.addChild(targetSpace);
+-    var own:MovieClip=new MovieClip();own["nick"]="Self#0001";own["dead"]=false;own["body"]=body;own["down"]=false;localSpace.addChild(own);
+-    var remote:MovieClip=new MovieClip();remote["nick"]="Target#0000";remote["dead"]=false;remote["body"]=target.body;remote["left"]=false;remote["right"]=true;remote["down"]=false;remote.x=40;remote.y=60;targetSpace.addChild(remote);
+-    r.tfm.self=own;r.tfm.players=[remote];follow.update(900);check(own.x==120 && own.y==80,"different parent transforms converted to local world space");check(placements[placements.length-1].x==4 && Math.abs(placements[placements.length-1].y-80/30)<0.0001,"converted coordinates reach native physics");
+-    check(body.velocity.vx==0 && body.velocity.vy==0,"display conversion preserves velocity fields");
+-    var b:ByteArray=new ByteArray();b.writeByte(4);b.writeByte(4);b.writeInt(0);b.writeInt(1);b.writeBoolean(true);b.writeBoolean(false);b.writeInt(999999);b.writeInt(-999999);b.writeShort(0);b.writeShort(0);b.writeBoolean(false);b.writeByte(0);b.position=0;follow.packet(b,920);
+-    check(own.x==120 && own.y==80,"raw packet coordinates cannot replace v3 display mapping");
+-    remote.x=60;remote.y=80;follow.update(940);check(own.x==130 && own.y==90,"v3 coordinates refresh every frame without a new packet");
+-    result="PASS: "+count+" live follow checks";
+-   }catch(e:Error){result="FAIL: "+e.message+" #"+e.errorID;}
+-   ExternalInterface.call("recordTest",result);
++    var root:MovieClip=new MovieClip();display.addChild(root);root.stage.focus=root.stage;var inputs:Object={};var writes:int=0;var packets:int=0;
++    root.stage.addEventListener(KeyboardEvent.KEY_DOWN,function(e:KeyboardEvent):void{inputs[e.keyCode]=true;});root.stage.addEventListener(KeyboardEvent.KEY_UP,function(e:KeyboardEvent):void{inputs[e.keyCode]=false;});
++    var body:Object={velocity:{vx:1.25,vy:-0.75},place:function(p:Point,a:Number):Boolean{writes++;throw new Error("forbidden position write");}};
++    var local:Object={nick:"Self#0001",x:20,y:30,body:body,clip:true,dead:false,left:false,right:false,down:false,side:false,jump:function(...args):void{},crouch:function(...args):void{},stand:function(...args):void{}};
++    var target:Object={nick:"Target#0000",x:345,y:180,body:{},clip:true,dead:false,jumpActive:false,left:false,right:true};
++    root.Keys={player:"self",player_list:"players",player_name:"nick",player_physics:"body",player_clip:"clip",is_dead:"dead",is_jumping:"jumpActive",player_moving_left:"left",player_moving_right:"right",jump:"jump",is_down:"down",crouch:"crouch",crouch2:"stand",static_side:"side",bot_set_position:"place",app_domain:{applicationDomain:{getDefinition:function(name:String):Class{return Point;}}},b2vec2:"Point",packet_handler_class:{receive:function(bytes:ByteArray):void{packets++;throw new Error("forbidden teleport packet");}},packet_handler:"receive",map_class:{current:{number:{code:123}}},map_instance:"current",bot_map_code_object:"number",bot_map_code_value:"code"};
++    root.tfm={self:local,players:[target]};root.Interface={};root.auto_play=true;root.current_round_code=1;
++    var motion:NativeMotion=NativeMotion.get(root);var owner:Object={};motion.place(owner,999,888);check(writes==0 && local.x==20 && local.y==30,"compatibility place cannot reposition player or body");motion.synchronizeCurrent();check(packets==0,"compatibility sync cannot send a teleport packet");motion.followSample(owner,false,true,true,500,600);check(inputs[39] && inputs[38],"shared Follow path still emits native movement and jump keys");check(local.x==20 && local.y==30 && writes==0,"shared Follow sample does not copy target coordinates");check(body.velocity.vx==1.25 && body.velocity.vy==-0.75,"native driver does not overwrite velocity");motion.release(owner);check(!inputs[39] && !inputs[38],"release still clears native keys");
++    var follow:FollowControllerV13Shared=new FollowControllerV13Shared(root);check(follow.command("/follow Target#0000"),"Follow command remains available");follow.update(0);check(inputs[39] && !inputs[37],"Follow steers toward a target using keys");check(writes==0 && packets==0 && local.x==20 && local.y==30,"initial Follow acquisition sends no position write or teleport packet");
++    target.x=-100;target.jumpActive=true;target.right=false;target.left=true;follow.update(20);check(inputs[37] && !inputs[39] && inputs[38],"direction change and jump still follow the target");check(local.x==20 && local.y==30 && writes==0,"live target changes never snap local coordinates");
++    root.Keys.map_class.current={number:{code:124}};follow.update(40);check(packets==0 && writes==0,"round change does not resynchronize by teleport");
++    local.body=null;follow.update(60);check(!inputs[37] && !inputs[38],"unavailable body releases native input");local.body=body;follow.update(80);check(inputs[37] && packets==0 && writes==0,"respawn reacquires with keys rather than teleport");
++    delete root.Keys.packet_handler_class;delete root.Keys.packet_handler;root.Keys.map_class.current={number:{code:125}};follow.update(100);check(inputs[37],"Follow no longer requires teleport packet mappings");
++    var field:TextField=new TextField();field.type="input";root.addChild(field);root.stage.focus=field;follow.update(120);check(!inputs[37] && !inputs[38],"chat focus still releases input");root.stage.focus=root.stage;
++    follow.command("/follow off");follow.update(140);check(writes==0 && packets==0 && !inputs[37] && !inputs[39] && !inputs[38],"turning Follow off preserves position and releases keys");
++    result="PASS: "+count+" no-teleport/native-key assertions";
++   }catch(error:Error){result="FAIL: "+error.message+" #"+error.errorID;}
++   trace(result);ExternalInterface.call("recordTest",result);
+   }
+  }
+ }
+--- a/fontes-robot/NativeMotion.as
++++ b/fontes-robot/NativeMotion.as
+@@ -58,31 +58,13 @@
+    if(player){put(player,read(k,"player_moving_left"),l);put(player,read(k,"player_moving_right"),r);}
+   }
+
+-  public function place(token:Object,x:Number,y:Number):void{
+-   if(finished())return;
+-   if(!isFinite(x)||!isFinite(y))throw new Error("Invalid coordinates",2401);
+-   var k:Object=root["Keys"];var local:Object=root["tfm"][k.player];var body:Object=local[k.player_physics];
+-   if(!body || !(body[k.bot_set_position] is Function))throw new Error("Native physics unavailable",2402);
+-   var vectorClass:Class=k.app_domain.applicationDomain.getDefinition(String(k.b2vec2)) as Class;
+-   if(body[k.bot_set_position](new vectorClass(x/30,y/30),0)===false)throw new Error("Native physics locked",2403);
+-   local.x=x;local.y=y;
++  // Kept as no-op compatibility entry points; automatic route corrections
++  // must never write the body or dispatch a position/teleport packet.
++  public function place(token:Object,x:Number,y:Number):void{}
++  public function followSample(token:Object,l:Boolean,r:Boolean,j:Boolean,x:Number,y:Number):void{
++   movement(token,l,r,j);
+   }
+-  // Single movement path for live Follow and the Robot's virtual route target.
+-  // Default keyboard jump path: the game owns velocity and animation frame.
+-  public function followSample(token:Object,l:Boolean,r:Boolean,j:Boolean,x:Number,y:Number):void{
+-   movement(token,l,r,j);place(token,x,y);
+-  }
+-  // Same native initialization as Follow, at the current local position only.
+-  // Caller owns lifecycle gating; invoke the mapped handler, not a socket API.
+-  public function synchronizeCurrent():void{
+-   if(finished())return;
+-   var k:Object=root["Keys"];var local:Object=k && root["tfm"] ? root["tfm"][k.player] : null;
+-   if(!local || (k.is_dead && local[k.is_dead]) || !local[k.player_physics] || !local[k.player_clip])throw new Error("Player not ready for sync",2408);
+-   var x:Number=Number(local.x);var y:Number=Number(local.y);
+-   if(!isFinite(x) || !isFinite(y) || Math.abs(x)>32767 || Math.abs(y)>32767)throw new Error("Invalid sync position",2408);
+-   if(!k.packet_handler_class || !k.packet_handler || !(k.packet_handler_class[k.packet_handler] is Function))throw new Error("Native sync mapping unavailable",2408);
+-   k.packet_handler_class[k.packet_handler](LegacyOptionsV5.encodePosition(Math.round(x),Math.round(y)));
+-  }
++  public function synchronizeCurrent():void{}
+   public function crouch(token:Object,down:Boolean):void{if(finished())return;if(owner!==token)movement(token,false,false,false);var k:Object=root["Keys"];var p:Object=root["tfm"][k.player];put(p,read(k,"is_down"),down);invoke(p,read(k,down ? "crouch" : "crouch2"),[read(p,read(k,"static_side"))]);}
+   public function release(token:Object):void{
+    if(owner!==token)return;
+--- a/fontes-robot/PatchRobot.java
++++ b/fontes-robot/PatchRobot.java
+@@ -3,11 +3,11 @@
+  public static void main(String[]args)throws Exception{
+   SWF s=new SWF(new FileInputStream(args[0]),false);DoABC2Tag tag=null;for(Tag t:s.getTags())if(t instanceof DoABC2Tag&&((DoABC2Tag)t).getABC().findClassByName("ChargeurTransformice_fla.MainTimeline")>=0)tag=(DoABC2Tag)t;
+   if(tag==null)throw new Exception("Loader missing");var a=tag.getABC();var idx=s.getAbcIndex();idx.selectAbc(a);
+-  for(String f:List.of("LocalServerLog.as","MusicPlayer.as","SettingsControlsUI.as","PerformanceControlsUI.as","RouteTiming.as","RouteLibrary.as","NativeMotion.as","FlyController.as","FollowControllerV13Shared.as","RoutePlayerNative.as","FollowAutoBest.as","FollowPlayersPanel.as","MenuShell.as","AstroVisual.as","LegacyOptionsRobotGuard.as"))new ActionScript3Parser(idx).addScript(Files.readString(Path.of(args[1],f)),f,a.instance_info.size(),a.script_info.size(),s.getDocumentClass(),a);
+-  Map<Integer,Integer> replacements=new HashMap<>();for(String[] pair:new String[][]{{"disney.MenuBootstrap","disney.MenuShell"},{"disney.WelcomeOnly","disney.LocalServerLog"},{"disney.SettingsControlsV2","disney.SettingsControlsUI"},{"disney.PerformanceControlsV2","disney.PerformanceControlsUI"},{"disney.RgbMarkerButton","disney.AstroVisual"},{"disney.RoutePlayer","disney.RoutePlayerNative"},{"disney.FollowControllerV13","disney.FollowControllerV13Shared"},{"disney.LegacyOptionsV5","disney.LegacyOptionsRobotGuard"}}){int old=a.findClassByName(pair[0]),next=a.findClassByName(pair[1]);if(old<0||next<0)throw new Exception("Required class missing");replacements.put(a.instance_info.get(old).name_index,a.instance_info.get(next).name_index);}
++  for(String f:List.of("LocalServerLog.as","ConnectionDiagnostics.as","MusicPlayer.as","SettingsControlsUI.as","PerformanceControlsUI.as","RouteTiming.as","RouteLibrary.as","NativeMotion.as","RouteFeedback.as","RouteInputPacer.as","FlyController.as","FollowControllerV13Shared.as","RoutePlayerNative.as","FollowAutoBest.as","FollowPlayersPanel.as","MenuShell.as","AstroVisual.as","LegacyOptionsRobotGuard.as"))new ActionScript3Parser(idx).addScript(Files.readString(Path.of(args[1],f)),f,a.instance_info.size(),a.script_info.size(),s.getDocumentClass(),a);
++  Map<Integer,Integer> replacements=new HashMap<>();for(String[] pair:new String[][]{{"disney.ConnectionGuard","disney.ConnectionDiagnostics"},{"disney.MenuBootstrap","disney.MenuShell"},{"disney.WelcomeOnly","disney.LocalServerLog"},{"disney.SettingsControlsV2","disney.SettingsControlsUI"},{"disney.PerformanceControlsV2","disney.PerformanceControlsUI"},{"disney.RgbMarkerButton","disney.AstroVisual"},{"disney.RoutePlayer","disney.RoutePlayerNative"},{"disney.FollowControllerV13","disney.FollowControllerV13Shared"},{"disney.LegacyOptionsV5","disney.LegacyOptionsRobotGuard"}}){int old=a.findClassByName(pair[0]),next=a.findClassByName(pair[1]);if(old<0||next<0)throw new Exception("Required class missing");replacements.put(a.instance_info.get(old).name_index,a.instance_info.get(next).name_index);}
+   int changed=0;int main=a.findClassByName("ChargeurTransformice_fla.MainTimeline");
+   for(var trait:a.instance_info.get(main).instance_traits.traits)if(trait instanceof com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter){String name=a.constants.getString(a.constants.getMultiname(trait.name_index).name_index);if(!List.of("swf_loaded","handle_packet").contains(name))continue;var body=a.findBody(((com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter)trait).method_info);int n=0;for(var op:body.getCode().code)if(op.definition.instructionCode==0x60 && replacements.containsKey(op.operands[0])){op.operands[0]=replacements.get(op.operands[0]);n++;}if(n>0){body.setModified();changed+=n;}}
+-  if(changed!=9)throw new Exception("Expected Robot, Follow, legacy guard and packet hooks; found "+changed);
++  if(changed!=10)throw new Exception("Expected Robot, Follow, legacy guard and packet hooks; found "+changed);
+   int best=a.findClassByName("disney.FollowAutoBest");
+   for(var t:a.instance_info.get(main).instance_traits.traits)if(t instanceof com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter && "handle_packet".equals(a.constants.getString(a.constants.getMultiname(t.name_index).name_index))){
+    var body=a.findBody(((com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter)t).method_info);
+@@ -16,6 +16,6 @@
+    var prefix=List.of(new com.jpexs.decompiler.flash.abc.avm2.instructions.AVM2Instruction(0,0x60,new int[]{a.instance_info.get(best).name_index}),new com.jpexs.decompiler.flash.abc.avm2.instructions.AVM2Instruction(0,0xd0,new int[]{}),new com.jpexs.decompiler.flash.abc.avm2.instructions.AVM2Instruction(0,0xd1,new int[]{}),new com.jpexs.decompiler.flash.abc.avm2.instructions.AVM2Instruction(0,0x46,new int[]{a.constants.getQnameId("receive",0x16,"",true),2}),new com.jpexs.decompiler.flash.abc.avm2.instructions.AVM2Instruction(0,0x12,new int[]{1}),new com.jpexs.decompiler.flash.abc.avm2.instructions.AVM2Instruction(0,0x47,new int[]{}));
+    for(int i=prefix.size()-1;i>=0;i--)body.insertInstruction(0,prefix.get(i));body.max_stack=Math.max(body.max_stack,3);body.setModified();
+   }
+-  tag.setModified(true);s.setModified(true);try(var out=new FileOutputStream(args[2])){s.saveTo(out);}System.out.println("Shared motion + Robot + Follow compiled; 9 references replaced");
++  tag.setModified(true);s.setModified(true);try(var out=new FileOutputStream(args[2])){s.saveTo(out);}System.out.println("Shared motion + Robot + Follow compiled; 10 references replaced");
+  }
+ }
+--- a/fontes-robot/RobotTests.as
++++ b/fontes-robot/RobotTests.as
+@@ -2,7 +2,7 @@
+  import ChargeurTransformice_fla.MainTimeline;import ChargeurTransformice_fla.Statements;import flash.display.MovieClip;import flash.events.Event;import flash.events.KeyboardEvent;import flash.events.IOErrorEvent;import flash.geom.Point;import flash.net.URLLoader;import flash.net.URLRequest;import flash.text.TextField;import flash.external.ExternalInterface;import flash.utils.setTimeout;import flash.utils.ByteArray;import flash.display.Sprite;
+  public class RgbMouseTests {
+   private static var count:int=0;private static function check(ok:Boolean,s:String):void{if(!ok)throw new Error(s);count++;}
+-  private static function walk(x:Number,delay:Number=100,j:Boolean=true):Array{return [{x:x,y:1102,vx:345,vy:65036,mr:true,ml:false,jump:j,frame:2},"walk",delay];}
++  private static function walk(x:Number,delay:Number=100,j:Boolean=true):Array{return [{x:x,y:1102,vx:345,vy:j ? 65036 : 0,mr:true,ml:false,jump:j,frame:2},"walk",delay];}
+   private static function fixture(display:MovieClip,steps:Array=null,sealedRoot:Boolean=false):Object{
+    var r:MovieClip=sealedRoot ? new SealedRobotRoot() : new MovieClip();display.addChild(r);var calls:Array=[];var jumps:Array=[];var markers:Array=[];var syncs:Array=[];var keys:Array=[];
+    var body:Object={velocity:{vx:0,vy:0},setPosition:function(p:Point,angle:Number):Boolean{calls.push({x:p.x,y:p.y});return true;}};
+@@ -27,29 +27,164 @@
+      check(int(ExternalInterface.call("routeRequests"))==initial,"animation/player initialization performs zero route requests");
+      f.player.body=f.body;
+      var tick:Function=function():void{try{bot.advance(clock);clock+=1000;tries++;
+-      if(f.calls.length>0){check(f.calls[0].x==6.46,"production loader fetches only real @1628732 route");check(int(ExternalInterface.call("routeRequests"))==initial+1,"only one small per-map request is needed");f.root.auto_play=false;bot.advance(clock);finished();}
++      if(bot.message.indexOf("executando @1628732")>=0 || bot.message.indexOf("ponto ")>=0){check(f.calls.length==0 && f.syncs.length==0,"production route loads and runs without forced coordinates");check(int(ExternalInterface.call("routeRequests"))==initial+1,"only one small per-map request is needed");f.root.auto_play=false;bot.advance(clock);finished();}
+       else if(tries>=2000)throw new Error("Production loader did not become ready: "+bot.message);
+       else setTimeout(tick,1);
+      }catch(error:Error){ExternalInterface.call("recordTest","FAIL: production loader "+error.message+" #"+error.errorID);}};tick();
+     }catch(error:Error){ExternalInterface.call("recordTest","FAIL: boot "+error.message);}},100);
+    }catch(error:Error){ExternalInterface.call("recordTest","FAIL: boot "+error.message);}},100);
+   }
++  private static function simulate(display:MovieClip,initialVX:Number,frame:int):void{
++   var a:Array=walk(100,3600000,false);a[0].vx=0;
++   var b:Array=walk(244,3600000,false);b[0].vx=345;
++   var c:Array=walk(416,3600000,false);c[0].mr=false;c[0].vx=0;
++   var f:Object=fixture(display,[a,b,c,["hole",3600000]]);f.body.velocity.vx=initialVX;
++   f.bot.advance(0);var completed:Boolean=false;
++   for(var time:int=frame;time<8000;time+=frame){
++    var velocity:Number=f.body.velocity.vx;var dv:Number=12*frame/1000;
++    if(f.player.right)velocity=Math.min(3.45,velocity+dv);
++    else if(f.player.left)velocity=Math.max(-3.45,velocity-dv);
++    else velocity=velocity>0 ? Math.max(0,velocity-dv) : Math.min(0,velocity+dv);
++    f.body.velocity.vx=velocity;f.player.x+=velocity*30*frame/1000;
++    var before:Number=f.player.x;f.bot.advance(time);
++    check(f.player.x==before && f.body.velocity.vx==velocity,"spatial feedback actuates only native controls");
++    if(f.bot.message.indexOf("confirmacao")>=0){completed=true;break;}
++   }
++   check(completed,"spatial mode completes synthetic path despite one-hour delays in every stored step");
++   check(f.calls.length==0 && f.syncs.length==0,"spatial simulation sends no forced coordinates or initial sync");
++  }
++  private static function simulateRecordedLaunch(display:MovieClip,frame:int):void{
++   var route:Array=[[{"mr":false,"ml":true,"x":1403,"y":1028,"vx":0,"vy":0,"jump":false,"frame":0},"walk",2006],[{"mr":false,"ml":true,"x":1403,"y":1028,"vx":0,"vy":0,"jump":false,"frame":0},"walk",0],[{"mr":false,"ml":true,"x":1343,"y":1028,"vx":65191,"vy":65036,"jump":true,"frame":9},"walk",237],[{"mr":true,"ml":false,"x":1272,"y":947,"vx":65191,"vy":65243,"jump":true,"frame":9},"walk",215],[{"mr":false,"ml":true,"x":1248,"y":926,"vx":65329,"vy":65328,"jump":true,"frame":9},"walk",77],[{"mr":false,"ml":true,"x":1004,"y":1029,"vx":67,"vy":388,"jump":false,"frame":9},"walk",701]];route.push(["hole",0]);
++   var f:Object=fixture(display,route);f.body.velocity.vx=0;
++   var launchedAt:Number=NaN;var floor:Number=f.player.y;
++   f.root.stage.addEventListener(KeyboardEvent.KEY_DOWN,function(e:KeyboardEvent):void{
++    if(e.keyCode==38 && NativeMotion.isSynthetic(f.root) && Math.abs(f.body.velocity.vy)<0.35 && f.player.y>=floor-0.1){f.body.velocity.vy=-5;launchedAt=f.player.x;}
++   });
++   f.bot.advance(0);var complete:Boolean=false;
++   for(var tick:int=frame;tick<=6000;tick+=frame){
++    var dt:Number=frame/1000;var vx:Number=f.body.velocity.vx;
++    if(f.player.left)vx=Math.max(-3.45,vx-12*dt);
++    else if(f.player.right)vx=Math.min(3.45,vx+12*dt);
++    else vx=vx>0 ? Math.max(0,vx-12*dt) : Math.min(0,vx+12*dt);
++    f.body.velocity.vx=vx;f.player.x+=vx*30*dt;
++    f.body.velocity.vy+=10*dt;f.player.y+=f.body.velocity.vy*30*dt;
++    if(f.player.y>=floor){f.player.y=floor;f.body.velocity.vy=0;}
++    var px:Number=f.player.x;var py:Number=f.player.y;f.bot.advance(tick);
++    check(f.player.x==px && f.player.y==py,"recorded-route model is actuated through keys only");
++    if(f.bot.message.indexOf("confirmacao")>=0){complete=true;break;}
++   }
++   check(isFinite(launchedAt) && Math.abs(launchedAt-402.9)<=6,"@298424 launches at recorded location within one simulation frame: "+launchedAt);
++   check(complete,"@298424 first six samples complete under native-key physics at "+frame+"ms: "+f.bot.message+" x="+f.player.x+" y="+f.player.y);
++   check(f.calls.length==0 && f.syncs.length==0,"recorded-route simulation uses no reposition or sync packets");
++   f.root.auto_play=false;f.bot.advance(7000);
++  }
+   public static function run(display:MovieClip):void{
+    try{
+-    var f:Object=fixture(display);f.body.velocity.vx=7;f.body.velocity.vy=-3;f.bot.advance(0);f.bot.advance(300);f.bot.advance(741);check(f.calls.length==0,"first recorded delay respected");f.bot.advance(742);check(f.calls.length==1 && f.player.x==118.5,"first target uses native physics and visual position");check(f.body.velocity.vx==7 && f.body.velocity.vy==-3,"Robot preserves native velocity instead of writing recorded VX/VY");check(f.jumps.length==0,"no direct jump/frame invocation at recorded step");var jumpDown:int=0;for each(var key:Object in f.keys)if(key.code==38 && key.down)jumpDown++;check(jumpDown==1,"real jump uses the same native keyboard path as Follow");f.bot.advance(792);check(f.calls.length==1 && f.player.x==118.5,"no interpolation or position writes between recorded timestamps");check(Math.abs(f.calls[0].x*30-f.player.x)<0.00001 && f.body.velocity.vx==7 && f.body.velocity.vy==-3,"last recorded pose remains aligned without velocity writes");f.bot.advance(842);check(f.player.x==148.5,"second recorded direction/jump state applied at original deadline");var jumpUp:int=0;jumpDown=0;for each(key in f.keys)if(key.code==38){if(key.down)jumpDown++;else jumpUp++;}check(jumpDown==1 && jumpUp==1,"held jump is neither repeated per frame nor triggered by recorded animation frame");f.bot.advance(879);var endingCalls:int=f.calls.length;f.bot.advance(1000);check(f.calls.length==endingCalls,"terminal cheese/hole segment hands movement to native physics");f.bot.advance(1289);check(!f.player.right && f.markers.length==0 && f.bot.message.indexOf("confirmacao")>=0,"hole releases controls and waits for real confirmation without forced packets");f.bot.advance(9000);check(f.calls.length==endingCalls,"no position writes after entering hole wait");
+-    f=fixture(display,[walk(100,0),walk(200,100),["hole",100]]);delete f.root.Keys.physics_state;delete f.root.Keys.physics_state_vx;delete f.root.Keys.physics_state_vy;f.bot.advance(0);f.bot.advance(300);f.bot.advance(350);f.bot.advance(400);check(f.player.x==60 && f.bot.message.indexOf("erro")<0,"Follow-based Robot does not require or invent velocity mappings");
+-    f=fixture(display,[walk(1000,0,false),walk(1100,100,false),["hole",100]]);f.map.container.mirror=true;f.player.x=500;f.bot.advance(0);f.bot.advance(300);f.bot.advance(350);check(f.player.x==500 && f.player.left,"mirrored recorded pose remains unchanged between samples");
+-    f=fixture(display,[walk(100,0),walk(200,0),["hole",0]]);f.bot.advance(0);f.bot.advance(300);check(f.calls.length==1,"one recorded movement consumed per frame even for zero delays");f.bot.advance(301);check(f.calls.length==2 && f.markers.length==0,"zero delay states preserve order without forced hole packet");
+-    var verticalFirst:Array=walk(100,0,false);var verticalNext:Array=walk(100,200,false);verticalNext[0].y=1989;f=fixture(display,[verticalFirst,verticalNext,["hole",100]]);f.bot.advance(0);f.bot.advance(300);f.bot.advance(400);check(Math.abs(f.player.y-330.6)<0.00001,"266px record is not anticipated or interpolated");f.bot.advance(500);check(Math.abs(f.player.y-596.7)<0.00001 && f.bot.message.indexOf("pausado")<0,"recorded transition no longer trips local divergence pause");check(f.body.velocity.vx==0 && f.body.velocity.vy==0,"large target transition also preserves engine velocity");
+-    f=fixture(display,[walk(100,0),["hole",100]]);f.player.x=-500;f.bot.advance(0);f.bot.advance(300);check(f.calls.length==0 && f.bot.message.indexOf("aguardando renascer")>=0,"incorrect initial spawn waits without teleport across map");
+-    f=fixture(display,[walk(100,0),walk(200,100),["hole",100]]);f.bot.advance(0);f.bot.advance(300);f.bot.setFocused(false);f.bot.advance(320);var held:int=f.calls.length;f.bot.advance(1000);check(f.calls.length==held && !f.player.right,"focus loss releases keys and stops Follow position writes");f.bot.setFocused(true);f.bot.advance(1100);check(Math.abs(f.player.x-30)<0.00001,"focus return resumes keys without inventing an intermediate coordinate");f.root.auto_play=false;f.bot.advance(1200);f.bot.advance(9000);check(!f.player.right,"disable releases keys and prevents later movement");
+-    f=fixture(display,[walk(100,0),["hole",100]]);var lockCalls:int=0;f.body.setPosition=function(p:Point,a:Number):Boolean{lockCalls++;return false;};f.bot.advance(0);f.bot.advance(300);f.bot.advance(400);f.bot.advance(799);check(lockCalls==1,"locked native physics retries are throttled like Follow");f.body.setPosition=function(p:Point,a:Number):Boolean{lockCalls++;return true;};f.bot.advance(800);check(lockCalls==2 && f.player.x==30,"temporary native lock resumes same state after 500ms without overdue burst");
+-    f=fixture(display,[walk(100,0),["hole",100]]);f.root.current_round_code=1;f.root.Keys.player_id="pid";f.player.pid=7;f.bot.advance(0);f.bot.advance(300);f.root.current_round_code=2;f.bot.advance(350);f.bot.advance(600);check(f.calls.length==2,"same map/body with new round token restarts correct route");var birth:ByteArray=new ByteArray();birth.writeByte(144);birth.writeByte(2);birth.writeUTF("Self#0001");birth.writeInt(7);birth.position=1;NativeMotion.observe(f.root,birth);f.bot.advance(650);f.bot.advance(900);check(f.calls.length==3 && birth.position==1,"native local respawn restarts without missing a dead frame or modifying packet cursor");
+-    f=fixture(display,[walk(100,0),["hole",100]]);f.root.Keys.player_id="pid";f.player.pid=7;f.bot.advance(0);f.bot.advance(300);f.bot.advance(400);var victory:ByteArray=new ByteArray();victory.writeByte(8);victory.writeByte(6);victory.writeByte(0);victory.writeInt(99);victory.position=1;NativeMotion.observe(f.root,victory);f.bot.advance(450);check(f.bot.message.indexOf("vitoria confirmada")<0,"other player's victory does not complete Robot");victory.position=3;victory.writeInt(7);victory.position=1;NativeMotion.observe(f.root,victory);f.bot.advance(500);check(f.bot.message.indexOf("vitoria confirmada")>=0 && victory.position==1,"server local victory ends playback with packet cursor preserved");
+-    f=fixture(display,[walk(100,0),["hole",100]],true);f.bot.advance(0);f.bot.advance(300);check(f.calls.length==1 && !NativeMotion.isSynthetic(f.root),"shared Follow mechanism works on sealed document root");
+-    MainTimeline.instance=display as MainTimeline;var old:Statements=new Statements();old.current_timeout=-1;old.play_map();old.play_sequence();old.step(null,"walk");old.player_victory();old.player_death();old.kill_player();old.send_cheese_packet();old.send_hole_packet();old.send_mort_packet();old.move_player(1,2);old.handle_preview_btn();check(old.current_timeout==-1 && old.new_cheese_packet(1,true)==null && old.new_victory_packet(0,1,0,1,1)==null,"retired legacy execution and forced packet functions stay inert");RoutePlayer.attach(display);check(true,"old RoutePlayer entry remains inert");
+-    var restRoute:Array=[];for(var n:int=0;n<100;n++){var w:Array=walk(395+n*35,n==0 ? 0 : 100,false);w[0].vy=0;restRoute.push(w);}restRoute.push(["hole",10000]);f=fixture(display,restRoute);f.root.Keys.is_jumping="jumpActive";f.player.jumpActive=false;f.bot.setTiming(new RouteTiming(123));var original:String=com.adobe.serialization.json.JSON.encode(restRoute);var rests:int=0;var wasRest:Boolean=false;for(var now:int=0;now<12000;now+=8){f.bot.advance(now);var resting:Boolean=f.bot.message.indexOf("microparada")>=0;if(resting && !wasRest){rests++;check(!f.player.left && !f.player.right,"microrest releases native movement without freezing socket");}wasRest=resting;}check(rests>=2 && f.bot.message.indexOf("100/101")>=0,"microrests retain all 100 recorded movement states with new shared Follow engine");check(f.body.velocity.vx==0 && f.body.velocity.vy==0 && com.adobe.serialization.json.JSON.encode(restRoute)==original,"microrest playback preserves native velocity and original JSON");
+-    f=fixture(display,[walk(100,0,false),["hole",20]]);for(n=0;n<120;n++){var base:int=n*1000;f.player.dead=true;f.bot.advance(base);f.player.dead=false;f.bot.advance(base+100);f.bot.advance(base+400);f.bot.advance(base+420);}check(f.calls.length==120 && f.syncs.length==120 && f.markers.length==0,"120 simulated respawns use only new controller and one initial sync per attempt");
++    var pacer:RouteInputPacer=new RouteInputPacer();
++    var rightInput:Object={left:false,right:true,jump:false};var leftInput:Object={left:true,right:false,jump:false};
++    check(pacer.allow(rightInput,0),"first Robot input is delivered without startup delay");
++    check(!pacer.allow(leftInput,1) && !pacer.allow(leftInput,16) && !pacer.allow(leftInput,32),"movement changes are spaced by 33 ms before native dispatch");
++    check(!pacer.allow(rightInput,33),"an obsolete pending reversal is discarded when latest input matches held keys");
++    check(pacer.allow(leftInput,34),"latest movement change is accepted after the bounded interval");
++    check(!pacer.allow({left:true,right:false,jump:true},35),"UP transitions use the same movement pacing rather than a second packet burst");
++    check(pacer.allow({left:true,right:false,jump:true},67),"UP is eligible at the next interval");
++    pacer.reset();check(pacer.allow(rightInput,68),"release or respawn discards pacing state and allows a fresh first input");
++    check(!pacer.allow(rightInput,1000),"held identical inputs never create periodic extra sends");
++    var f:Object=fixture(display,[walk(100,3600000,false),walk(200,3600000,false),["hole",3600000]]);f.bot.advance(0);
++    check(f.player.right && f.bot.message.indexOf("ponto 2/3")>=0,"recorded delays never defer native input or waypoint selection");
++    check(f.player.x==30 && f.calls.length==0 && f.syncs.length==0,"movement never assigns recorded coordinates or performs initial synchronization");
++    var held:int=f.keys.length;f.bot.advance(16);f.bot.advance(32);check(f.keys.length==held,"unchanged held inputs are not repeated each frame");
++    f.bot.advance(100000);check(f.player.right && f.bot.message.indexOf("ponto 2/3")>=0 && f.bot.message.indexOf("pausado")<0,"neither elapsed time nor frame gap pauses or skips an unreached point");
++    f.player.x=60;f.bot.advance(100016);check(f.bot.message.indexOf("confirmacao")>=0 && !f.player.right,"native arrival advances route and terminal marker without recorded waits");
++    check(f.calls.length==0 && f.markers.length==0,"cheese and hole are passive markers rather than forced packets");
++
++    f=fixture(display,[walk(100,0,false),walk(150,0,false),["hole",0]]);f.bot.advance(0);check(f.bot.message.indexOf("ponto 2/3")>=0,"being within 24 pixels does not confirm a point still ahead");
++    f.player.x=40;f.bot.advance(16);check(f.bot.message.indexOf("ponto 2/3")>=0,"nearby point still requires longitudinal progress");
++    f.player.x=45;f.bot.advance(32);check(f.bot.message.indexOf("confirmacao")>=0,"actual passage confirms the pending point");
++    f=fixture(display,[walk(100,0,false),walk(120,0,false),walk(140,0,false),["hole",0]]);f.bot.advance(0);f.player.x=45;f.bot.advance(16);
++    check(f.bot.message.indexOf("confirmacao")>=0,"dense points crossed in one physical segment are consumed in order in one frame");
++
++    f=fixture(display,[walk(100,0,false),walk(200,0,false),["hole",0]]);f.body.velocity.vx=9;f.bot.advance(0);
++    check(f.player.left && f.body.velocity.vx==9,"live overspeed is corrected by braking input without writing velocity");
++    var collision:Array=walk(200,0,false);collision[0].vx=64075;f=fixture(display,[walk(100,0,false),collision,["hole",0]]);f.bot.advance(0);
++    check(f.player.right && !f.player.left,"negative after-collision snapshot VX cannot pull the mouse away from an unvisited point ahead");
++    f=fixture(display,[walk(1000,0,false),walk(1100,0,false),["hole",0]]);f.map.container.mirror=true;f.player.x=500;f.bot.advance(0);
++    check(f.player.left && f.player.x==500,"mirrored route changes input direction without moving the body");
++
++    f=fixture(display,[walk(100,0,false),walk(200,0,false),["hole",0]]);f.bot.advance(0);f.bot.setFocused(false);f.bot.advance(16);
++    check(!f.player.left && !f.player.right,"focus loss releases native controls");f.bot.setFocused(true);f.bot.advance(32);
++    check(f.bot.message.indexOf("reative")>=0 && !f.player.right,"manual focus suspension does not silently resume old keys");
++    f.root.auto_play=false;f.bot.advance(48);f.root.auto_play=true;f.bot.advance(64);
++    check(f.bot.message.indexOf("pausado")<0 && f.player.right,"reactivation starts without an added startup delay");
++    f.root.auto_play=false;f.bot.advance(80);check(!f.player.right && f.calls.length==0,"disable cancels spatial steering");
++    f=fixture(display,[walk(100,0,false),walk(200,0,false),["hole",0]]);f.bot.advance(0);f.player.dead=true;f.bot.advance(16);
++    check(!f.player.right,"death releases held input");f.player.dead=false;f.bot.advance(32);check(f.calls.length==0 && f.syncs.length==0,"respawn neither teleports nor sends a native sync packet");
++    f=fixture(display,[walk(100,0,false),["hole",0]],true);f.bot.advance(0);check(f.calls.length==0 && !NativeMotion.isSynthetic(f.root),"spatial playback works with sealed document root");
++
++    var feedback:RouteFeedback=new RouteFeedback();var readPlayer:Object={x:999,y:999};var velocity:Object={xx:0,yy:0};var position:Object={xx:5,yy:7};
++    var readBody:Object={getVelocity:function():Object{return velocity;},getTransform:function():Object{return {position:position};}};
++    var readKeys:Object={get_linear_velocity:"getVelocity",get_x_form:"getTransform",pos_x:"xx",pos_y:"yy"};var state:Object=feedback.observe(readPlayer,readBody,readKeys,0);
++    check(state.x==150 && state.y==210 && readPlayer.x==999,"feedback reads physical rather than visual coordinates without writing them");
++    var target:Object={x:150,y:210,vx:3.45,vy:0,mr:true,ml:false,jump:false};var c:Object=feedback.controls(target);
++    check(c.right && !c.left,"live VX below desired magnitude produces ordinary right input");velocity.xx=7;feedback.observe(readPlayer,readBody,readKeys,16);c=feedback.controls(target);
++    check(c.left && !c.right && velocity.xx==7,"native braking input leaves measured VX unchanged");
++    velocity.xx=3.4;feedback.observe(readPlayer,readBody,readKeys,32);c=feedback.controls(target);check(c.right && !c.left,"hysteresis avoids noise near desired velocity");
++    velocity.xx=7;velocity.yy=-4;target.jump=true;feedback.observe(readPlayer,readBody,readKeys,48);c=feedback.controls(target);
++    check(c.left && c.jump && velocity.yy==-4,"native air control does not force VY or gravity");
++    velocity.xx=0;velocity.yy=0;feedback.observe(readPlayer,readBody,readKeys,64);c=feedback.controls({x:210,y:210,vx:-14.61,vy:0,mr:true,ml:false,jump:false});
++    check(c.right,"after-collision velocity sign cannot reverse spatial approach away from target");
++    c=feedback.controls({x:151,y:210,vx:0,vy:0,mr:false,ml:false,jump:false});check(c.right,"small outstanding displacement is not trapped by the velocity deadband");
++    var presses:int=0;
++    // Incoming state, ballistic launch reconstruction and phase regressions.
++    feedback.reset();readPlayer={x:30,y:330.6};velocity={xx:3.45,yy:0};
++    readBody={getVelocity:function():Object{return velocity;}};
++    var incoming:Object={x:30,y:330.6,vx:3.45,vy:0,ml:false,mr:true,jump:false};
++    var reversal:Object={x:36,y:330.6,vx:3.45,vy:0,ml:true,mr:false,jump:false};
++    feedback.observe(readPlayer,readBody,readKeys,0);
++    c=feedback.controls(reversal,incoming);check(c.right && !c.left,"future braking flag does not reverse the incoming segment before arrival");
++    var takeoff:Object={x:60,y:330.6,vx:3.45,vy:-5,ml:false,mr:true,jump:true};
++    c=feedback.controls(takeoff,incoming);check(!c.jump,"UP waits for the recorded ground takeoff instead of firing a full segment early");
++    readPlayer.x=60;feedback.observe(readPlayer,readBody,readKeys,16);c=feedback.controls(takeoff,incoming);check(c.jump && c.right,"takeoff issues UP together with the existing horizontal input");
++    var rising:Object={x:80.7,y:306.6,vx:3.45,vy:-3,ml:false,mr:true,jump:true};
++    feedback.changeInputs();readPlayer.x=30;feedback.observe(readPlayer,readBody,readKeys,32);c=feedback.controls(rising,incoming);check(!c.jump,"elevated sample reconstructs its takeoff instead of jumping at segment start");
++    readPlayer.x=60;feedback.observe(readPlayer,readBody,readKeys,48);c=feedback.controls(rising,incoming);check(c.jump,"elevated sample triggers at its reconstructed ballistic launch position");
++    feedback.reset();readPlayer={x:0,y:0};velocity={xx:0,yy:-3};feedback.observe(readPlayer,readBody,readKeys,0);
++    readPlayer.y=-10;feedback.observe(readPlayer,readBody,readKeys,100);
++    check(!feedback.checkpoint({x:0,y:-8,vy:3},0),"descending checkpoint cannot be consumed while ascending through the same coordinate");
++    velocity.yy=3;readPlayer.y=-12;feedback.observe(readPlayer,readBody,readKeys,200);readPlayer.y=-8;feedback.observe(readPlayer,readBody,readKeys,300);
++    check(feedback.checkpoint({x:0,y:-8,vy:3},200),"descending checkpoint is accepted on the matching flight phase");
++    var delayedJump:Array=walk(300,100,true);delayedJump[0].vy=65036;
++    f=fixture(display,[walk(100,0,false),delayedJump,walk(500,100,true),["hole",0]]);f.bot.advance(0);
++    presses=0;for each(var eventKey:Object in f.keys)if(eventKey.code==38 && eventKey.down)presses++;
++    check(presses==0 && f.player.right,"executor does not bypass launch calculation with a premature UP event");
++    f.player.x=90;f.bot.advance(33);presses=0;for each(eventKey in f.keys)if(eventKey.code==38 && eventKey.down)presses++;
++    check(presses==1,"executor commits UP once at the actual takeoff waypoint");
++    feedback.reset();readPlayer={x:0,y:0};feedback.observe(readPlayer,{}, {},0);readPlayer.x=6;state=feedback.observe(readPlayer,{}, {},200);
++    check(Math.abs(state.vx-1)<0.00001 && feedback.source=="estimada","missing native getter uses marked position-derived estimate in matching units");
++    feedback.reset();state=feedback.observe(readPlayer,{}, {},500);check(state.vx==0 && feedback.source=="aguardando","player reset discards old estimates");
++
++    feedback.reset();readPlayer={x:0,y:0};feedback.observe(readPlayer,{}, {},0);
++    check(!feedback.checkpoint({x:6,y:0},0,{x:0,y:0}),"broad proximity cannot approve future point before segment progress");
++    readPlayer.x=10;feedback.observe(readPlayer,{}, {},100);check(feedback.checkpoint({x:4,y:0},0,{x:0,y:0}),"actual swept visit confirms first point");var firstHit:Number=feedback.hitAt;feedback.crossedAt(firstHit);
++    check(feedback.checkpoint({x:6,y:0},feedback.since(),{x:4,y:0}) && feedback.hitAt>firstHit,"same-frame next point uses later part of real movement");
++    var secondHit:Number=feedback.hitAt;feedback.crossedAt(secondHit);check(feedback.checkpoint({x:8,y:0},feedback.since(),{x:6,y:0}) && feedback.hitAt>secondHit,"dense visits are temporally ordered");
++    check(!feedback.checkpoint({x:4,y:0},feedback.hitAt+0.001,{x:8,y:0}),"old pass cannot satisfy later return point");
++    feedback.reset();readPlayer.x=0;feedback.observe(readPlayer,{}, {},0);readPlayer.x=200;feedback.observe(readPlayer,{}, {},100);check(!feedback.checkpoint({x:100,y:0},0),"large external reposition is not a fake swept visit");
++
++    var ground:Array=walk(100,3600000,false);ground[0].vx=0;var elevated:Array=walk(100,3600000,true);elevated[0].y=982;elevated[0].vx=0;
++    f=fixture(display,[ground,elevated,["cheese",3600000],["hole",3600000]]);f.bot.advance(0);presses=0;for each(var key:Object in f.keys)if(key.code==38 && key.down)presses++;
++    check(presses==1 && f.bot.message.indexOf("ponto 2/4")>=0,"spatial target activates jump before requiring its elevated coordinate");f.body.velocity.vy=-5;
++    for(var time:int=16;time<=600;time+=16){f.body.velocity.vy+=10*0.016;f.player.y+=f.body.velocity.vy*30*0.016;var physicalY:Number=f.player.y;f.bot.advance(time);check(f.player.y==physicalY,"native jump model is never repositioned by controller");}
++    check(f.bot.message.indexOf("confirmacao")>=0 && f.markers.length==0,"native jump reaches point and passes cheese/hole markers without recorded delays");
++    presses=0;for each(key in f.keys)if(key.code==38 && key.down)presses++;check(presses==1,"jump key is not spammed per frame");
++
++    f=fixture(display,[walk(100,0,false),["hole",0]]);f.root.Keys.player_id="pid";f.player.pid=7;f.bot.advance(0);
++    var victory:ByteArray=new ByteArray();victory.writeByte(8);victory.writeByte(6);victory.writeByte(0);victory.writeInt(7);victory.position=1;NativeMotion.observe(f.root,victory);f.bot.advance(16);
++    check(f.bot.message.indexOf("vitoria confirmada")>=0 && victory.position==1,"native local victory and packet cursor remain intact");
++    MainTimeline.instance=display as MainTimeline;var old:Statements=new Statements();old.current_timeout=-1;old.play_map();old.play_sequence();old.step(null,"walk");old.player_victory();old.player_death();old.kill_player();old.send_cheese_packet();old.send_hole_packet();old.send_mort_packet();old.move_player(1,2);old.handle_preview_btn();
++    check(old.current_timeout==-1 && old.new_cheese_packet(1,true)==null,"retired forced movement and packet functions remain inert");
++    simulateRecordedLaunch(display,16);simulateRecordedLaunch(display,33);simulateRecordedLaunch(display,50);
++    simulate(display,0,16);simulate(display,1,16);simulate(display,-0.5,33);
+     var loader:URLLoader=new URLLoader();loader.addEventListener(IOErrorEvent.IO_ERROR,function(e:IOErrorEvent):void{ExternalInterface.call("recordTest","FAIL: full route library could not load");});
+     loader.addEventListener(Event.COMPLETE,function(e:Event):void{
+      var catalog:RouteLibrary=new RouteLibrary(String(loader.data));loader.data="";var codes:Array=[];var cursor:int=0;var totalSteps:int=0;
+--- /dev/null
++++ b/fontes-robot/RouteFeedback.as
+@@ -0,0 +1,191 @@
++package disney {
++ import flash.display.MovieClip;
++
++ // Read-only feedback. All actuation remains in NativeMotion.movement().
++ public class RouteFeedback {
++  public static const RADIUS:Number=24;
++  public static const CONFIRM_RADIUS:Number=8;
++  public var hitAt:Number;
++  private var history:Array=[];
++  private var current:Object;
++  private var correction:int=0;
++  private var boundary:Number=-1;
++  private var frameSeconds:Number=1/60;
++  private var braking:Number=12;
++  private var gravity:Number=10;
++  private var jumpStarted:Boolean=false;
++  public var source:String="aguardando";
++
++  public function reset():void {history=[];current=null;correction=0;boundary=-1;hitAt=NaN;source="aguardando";frameSeconds=1/60;braking=12;gravity=10;jumpStarted=false;}
++  private function read(o:Object,key:*):* {
++   try {if(o && key!=null && key in o)return o[key];}catch(ignored:Error){}
++   return null;
++  }
++  private function component(o:Object,a:*,b:*):Number {
++   var v:* = read(o,a);if(v==null)v=read(o,b);
++   return v is Number && isFinite(Number(v)) ? Number(v) : NaN;
++  }
++  public function observe(player:Object,body:Object,k:Object,now:Number,inputs:Object=null):Object {
++   var x:Number=Number(player.x);var y:Number=Number(player.y);
++   try {
++    var transform:Function=read(body,k.get_x_form) as Function;
++    if(transform!=null){var t:Object=transform.apply(body,[]);var pos:Object=t ? t.position : null;
++     var px:Number=component(pos,k.pos_x,null);var py:Number=component(pos,k.pos_y,null);
++     if(isFinite(px) && isFinite(py)){x=px*30;y=py*30;}
++    }
++   }catch(ignoredTransform:Error){}
++   if(!isFinite(x) || !isFinite(y))throw new Error("Posicao local indisponivel",2601);
++   var vx:Number=NaN;var vy:Number=NaN;
++   try {
++    var getter:Function=read(body,k.get_linear_velocity) as Function;
++    var velocity:Object=getter!=null ? getter.apply(body,[]) : read(body,k.physics_state);
++    vx=component(velocity,k.pos_x,k.physics_state_vx);
++    vy=component(velocity,k.pos_y,k.physics_state_vy);
++   }catch(ignoredVelocity:Error){}
++   source="nativa";
++   if(!isFinite(vx) || !isFinite(vy)){
++    source="estimada";
++    if(current && now>current.time && now-current.time<=250){
++     var seconds:Number=(now-current.time)/1000;
++     vx=(x-current.x)/(30*seconds);vy=(y-current.y)/(30*seconds);
++    }else{vx=0;vy=0;source="aguardando";}
++   }
++   if(current && now>current.time && now-current.time<=100){
++    var dt:Number=(now-current.time)/1000;
++    frameSeconds=0.75*frameSeconds+0.25*dt;
++    var observedGravity:Number=(vy-current.vy)/dt;
++    if(source=="nativa" && Math.abs(current.vy)>0.7 && Math.abs(vy)>0.7 && observedGravity>=2 && observedGravity<=25)
++     gravity=0.85*gravity+0.15*observedGravity;
++    if(source=="nativa" && inputs && Math.abs(current.vx)>0.5 &&
++       ((current.vx>0 && inputs.left && !inputs.right) || (current.vx<0 && inputs.right && !inputs.left))){
++     var deceleration:Number=(Math.abs(current.vx)-Math.abs(vx))/dt;
++     // Ignore impacts, bounces and ambiguous external impulses.
++     if(current.vx*vx>0 && deceleration>=2 && deceleration<=40)braking=0.8*braking+0.2*deceleration;
++    }
++   }
++   current={x:x,y:y,vx:vx,vy:vy,time:now,phase:vy < -0.35 ? "subindo" : (vy > 0.35 ? "caindo" : "apoio")};history.push(current);
++   while(history.length>512)history.shift();
++   return current;
++  }
++  public function state():Object {return current;}
++  // Circle entry plus forward progress along the incoming route segment.
++  // Returns the earliest actual visit, not the timestamp of the recorded step.
++  private function entry(a:Object,b:Object,target:Object,previous:Object,since:Number):Number {
++   // The same coordinate can occur on ascent and descent. Do not consume a
++   // future landing checkpoint during the outward half of the jump.
++   if(Number(target.vy)<-0.7 && Number(a.vy)>0.7 && Number(b.vy)>0.7)return NaN;
++   if(Number(target.vy)>0.7 && Number(a.vy)<-0.7 && Number(b.vy)<-0.7)return NaN;
++   var elapsed:Number=b.time-a.time;
++   var lo:Number=elapsed>0 ? Math.max(0,(since-a.time)/elapsed) : 0;
++   var hi:Number=1;
++   if(lo>hi || b.time<since)return NaN;
++   var sx:Number=b.x-a.x;var sy:Number=b.y-a.y;var length2:Number=sx*sx+sy*sy;
++   var mx:Number=a.x-target.x;var my:Number=a.y-target.y;
++   var radius2:Number=CONFIRM_RADIUS*CONFIRM_RADIUS;
++   if(length2<=0){if(mx*mx+my*my>radius2)return NaN;}
++   else {
++    var linear:Number=2*(mx*sx+my*sy);
++    var constant:Number=mx*mx+my*my-radius2;
++    var discriminant:Number=linear*linear-4*length2*constant;
++    if(discriminant<0)return NaN;
++    var root:Number=Math.sqrt(Math.max(0,discriminant));
++    lo=Math.max(lo,(-linear-root)/(2*length2));
++    hi=Math.min(hi,(-linear+root)/(2*length2));
++   }
++   if(previous){
++    var ux:Number=target.x-previous.x;var uy:Number=target.y-previous.y;
++    var distance:Number=Math.sqrt(ux*ux+uy*uy);
++    if(distance>0.000001){
++     ux/=distance;uy/=distance;
++     var before:Number=mx*ux+my*uy;
++     var progress:Number=sx*ux+sy*uy;
++     var tolerance:Number=Math.min(2,Math.max(0.5,distance*0.1));
++     if(Math.abs(progress)<0.000000001){if(before < -tolerance)return NaN;}
++     else if(progress>0)lo=Math.max(lo,(-tolerance-before)/progress);
++     else hi=Math.min(hi,(-tolerance-before)/progress);
++    }
++   }
++   if(lo>hi+0.00000001 || hi<0 || lo>1)return NaN;
++   lo=Math.max(0,Math.min(1,lo));
++   return a.time+lo*elapsed;
++  }
++  public function checkpoint(target:Object,since:Number,previous:Object=null):Boolean {
++   hitAt=NaN;if(!current)return false;
++   var from:int=0;var to:int=history.length;
++   while(from<to){var middle:int=int((from+to)/2);if(history[middle].time<since)from=middle+1;else to=middle;}
++   for(var i:int=from;i<history.length;i++){
++    var b:Object=history[i];
++    var a:Object=i>0 ? history[i-1] : b;
++    var sx:Number=b.x-a.x;var sy:Number=b.y-a.y;
++    var span:Number=b.time-a.time;
++    // Cropping at 'since' keeps the unconsumed part of the same frame's path.
++    // Large external repositions never become synthetic swept segments.
++    if(span>250 || span<=0 || sx*sx+sy*sy>4096)a=b;
++    var visited:Number=entry(a,b,target,previous,since);
++    if(isFinite(visited)){hitAt=visited;return true;}
++   }
++   return false;
++  }
++  public function crossedAt(now:Number):void {boundary=Math.max(boundary,now);}
++  public function changeInputs():void {correction=0;jumpStarted=false;}
++  public function since():Number {return boundary;}
++
++  // Samples describe the state AT a waypoint. Keep the incoming command
++  // until arrival; do not apply a future reversal at the previous waypoint.
++  public function controls(target:Object,previous:Object=null):Object {
++   if(!target || !current)return {left:false,right:false,jump:false};
++   var incoming:Object=previous ? previous : target;
++   var l:Boolean=Boolean(incoming.ml);var r:Boolean=Boolean(incoming.mr);
++   var jump:Boolean=Boolean(incoming.jump);
++   var dx:Number=target.x-current.x;
++   var direction:Number=dx<0 ? -1 : 1;
++   var desired:Number=Math.abs(Number(target.vx));
++   if(previous){
++    var span:Number=Math.abs(target.x-previous.x);
++    var progress:Number=span>0.5 ? Math.max(0,Math.min(1,1-Math.abs(dx)/span)) : 1;
++    desired=Math.abs(Number(previous.vx))*(1-progress)+desired*progress;
++    // A resting departure snapshot is not a command to stay at rest.
++    if(desired<0.35 && Math.abs(dx)>2 && (l!=r || target.ml!=target.mr))desired=3.45;
++   }
++   var wantedVX:Number=desired*direction;
++   if(Math.abs(dx)<=0.5)wantedVX=l!=r ? (l ? -desired : desired) : Number(target.vx);
++   // Limit the approach speed when the recording actually stops here.
++   // v^2 = v_end^2 + 2*a*distance, with units converted from pixels to metres.
++   if(previous && Math.abs(Number(target.vx))<0.35 && !target.ml && !target.mr){
++    var stopping:Number=Math.sqrt(Number(target.vx)*Number(target.vx)+2*braking*Math.max(0,Math.abs(dx)-1)/30);
++    wantedVX=direction*Math.min(Math.abs(wantedVX),stopping);
++   }
++   // Predict one measured frame ahead to brake before overshooting.
++   var horizon:Number=Math.max(0.008,Math.min(0.05,frameSeconds));
++   var predictedError:Number=dx-(current.vx-wantedVX)*30*horizon;
++   var effort:Number=0.045*predictedError+0.8*(wantedVX-current.vx);
++   if(Math.abs(effort)>=0.8)correction=effort<0 ? -1 : 1;
++   else if(Math.abs(effort)<=0.25)correction=0;
++   if(Math.abs(dx)>0.5 && Math.abs(current.vx)<0.35 && Math.abs(effort)<0.8)correction=direction;
++   if(correction<0){l=true;r=false;}
++   else if(correction>0){l=false;r=true;}
++   if(previous && Boolean(target.jump)!=Boolean(previous.jump)){
++    if(target.jump){
++     // Reconstruct the takeoff from the first rising sample. This allows an
++     // elevated checkpoint without jumping a whole segment too early.
++     var flight:Number=Math.max(0,Math.min(0.5,(Number(target.vy)+5)/gravity));
++     var launchX:Number=target.x-Number(target.vx)*30*flight;
++     var launchY:Number=target.y-30*(-5*flight+0.5*gravity*flight*flight);
++     var travel:Number=target.x-previous.x;
++     var nearLaunch:Boolean=Math.abs(launchX-current.x)<=Math.max(2,Math.abs(current.vx)*30*horizon);
++     var passedLaunch:Boolean=travel>0 ? current.x>=launchX : (travel<0 ? current.x<=launchX : nearLaunch);
++     var grounded:Boolean=Math.abs(current.vy)<0.35;
++     var plausible:Boolean=Number(target.vy)<=-0.35 && Number(target.vy)>=-5.35 && Math.abs(launchY-current.y)<=8;
++     jumpStarted=jumpStarted || (plausible && (nearLaunch || passedLaunch)) ||
++          (grounded && !plausible && target.y<current.y-8 && Math.abs(travel)<2);
++     jump=jumpStarted;
++    }else{
++     // Releasing UP does not force vertical velocity; release at the sample.
++     jump=Boolean(previous.jump);
++    }
++   }
++   return {left:l,right:r,jump:jump};
++  }
++
++ }
++}
+--- /dev/null
++++ b/fontes-robot/RouteInputPacer.as
+@@ -0,0 +1,16 @@
++package disney {
++ // Coalesces Robot input changes before the native game handles/sends them.
++ // No socket queue, encryption changes, heartbeat delay or artificial lag.
++ public class RouteInputPacer {
++  public static const INTERVAL:int=33;
++  private var emitted:Object;
++  private var at:Number=0;
++  public function reset():void{emitted=null;at=0;}
++  public function allow(input:Object,now:Number):Boolean{
++   if(!input || !isFinite(now))return false;
++   if(emitted && input.left==emitted.left && input.right==emitted.right && input.jump==emitted.jump)return false;
++   if(emitted && now>=at && now-at<INTERVAL)return false;
++   emitted={left:Boolean(input.left),right:Boolean(input.right),jump:Boolean(input.jump)};at=now;return true;
++  }
++ }
++}
+--- a/fontes-robot/RoutePlayerNative.as
++++ b/fontes-robot/RoutePlayerNative.as
+@@ -1,21 +1,21 @@
+ package disney {
+  import flash.display.MovieClip;import flash.display.DisplayObject;import flash.display.InteractiveObject;import flash.events.Event;import flash.events.KeyboardEvent;import flash.events.IOErrorEvent;import flash.events.SecurityErrorEvent;import flash.net.URLLoader;import flash.net.URLRequest;import flash.text.TextField;import flash.utils.Dictionary;import flash.utils.getTimer;import flash.utils.ByteArray;
+  public class RoutePlayerNative {
+-  private var cheeseConfirmed:Boolean=false;private var cheeseWaitUntil:int=-1;private var cheeseWaitStarted:int=0;private var managed:Boolean=false;private var managedOn:Boolean=false;private var worldSpace:Boolean=false;
++  private var managed:Boolean=false;private var managedOn:Boolean=false;private var worldSpace:Boolean=false;
+   private static var instances:Dictionary=new Dictionary(true);
+-  private var focused:Boolean=true;private var suspendedAt:int=-1;private var roundToken:String="";private var restartPending:Boolean=false;private var waitingSpawn:Boolean=false;private var restUntil:int=0;private var restAt:int=0;private var lastState:Object;private var timing:RouteTiming;private var synchronized:Boolean=false;
++  private var inputPacer:RouteInputPacer=new RouteInputPacer();private var commandState:Object;private var lastControl:Object={left:false,right:false,jump:false};private var feedback:RouteFeedback=new RouteFeedback();private var focused:Boolean=true;private var roundToken:String="";private var restartPending:Boolean=false;private var lastState:Object;
+   private var remote:Boolean=true;private var loadingCode:String="";private var failedCode:String="";private var cacheOrder:Array=[];private var root:MovieClip;private var motion:NativeMotion;private var routes:Object;private var loadError:String="";private var loader:URLLoader;
+   private var map:Object;private var player:Object;private var body:Object;private var code:String="";private var aliveBefore:Boolean=false;
+-  private var sequence:Array;private var index:int=0;private var due:Number=0;private var settle:int=0;private var enabled:Boolean=false;private var attempted:Boolean=false;private var running:Boolean=false;private var paused:Boolean=false;
+-  private var mirror:Boolean=false;private var width:Number=800;private var pauseMessage:String="Robot: pausado; reative para reiniciar";private var hasSample:Boolean=false;private var won:Boolean=false;private var entering:Boolean=false;private var holeWaitUntil:int=0;private var retryAt:int=0;private var failure:String="";public var message:String="Robot: aguardando jogo";
+-  public function RoutePlayerNative(value:MovieClip,external:Boolean=false){managed=external;root=value;timing=new RouteTiming(uint(getTimer())^uint(Math.random()*2147483647));motion=NativeMotion.get(value);if(!managed)motion.observeWith(packet);routes={};}
++  private var sequence:Array;private var index:int=0;private var enabled:Boolean=false;private var attempted:Boolean=false;private var running:Boolean=false;private var paused:Boolean=false;
++  private var mirror:Boolean=false;private var width:Number=800;private var pauseMessage:String="Robot: pausado; reative para reiniciar";private var won:Boolean=false;private var entering:Boolean=false;private var failure:String="";public var message:String="Robot: aguardando jogo";
++  public function RoutePlayerNative(value:MovieClip,external:Boolean=false){managed=external;root=value;motion=NativeMotion.get(value);if(!managed)motion.observeWith(packet);routes={};}
+   public function setManagedActive(value:Boolean):void{if(!managed)return;managedOn=value;if(!value){cancelLoad();reset(getTimer());enabled=false;}}
+   public function setWorldSpace(value:Boolean):void{worldSpace=value;}
+   public static function attach(value:MovieClip):void{
+    if(!value || !value.stage || instances[value])return;var r:RoutePlayerNative=new RoutePlayerNative(value);instances[value]=r;r.loadRoutes();
+    value.stage.addEventListener(Event.ACTIVATE,function(e:Event):void{r.setFocused(true);});
+    value.stage.addEventListener(Event.DEACTIVATE,function(e:Event):void{r.setFocused(false);});
+-   value.stage.addEventListener(Event.ENTER_FRAME,function(e:Event):void{r.advance(getTimer());});
++   value.stage.addEventListener(Event.ENTER_FRAME,function(e:Event):void{r.advance(getTimer());},false,1000);
+    value.stage.addEventListener(KeyboardEvent.KEY_DOWN,function(e:KeyboardEvent):void{
+     if(NativeMotion.isSynthetic(value))return;
+     if(value.stage.focus is TextField && TextField(value.stage.focus).type=="input")return;
+@@ -42,13 +42,12 @@
+    var total:int=0;for(var name:String in value){if(!/^@(?:[0-9]+|a|v)$/.test(name) || !(value[name] is Array))throw new Error("Invalid map route",2502);total++;}
+    if(total==0)throw new Error("Empty route dictionary",2503);cancelLoad();remote=false;routes=value;loadError="";
+   }
+-  private function status(text:String):void{message=text;var ui:Object=root["Interface"];if(ui && ui["status_field"])ui["status_field"].text=text;}
+-  private function release():void{motion.release(this);}
++  private function status(text:String):void{text="Robot ESPACIAL: "+text.replace(/^Robot: /,"");message=text;var ui:Object=root["Interface"];if(ui && ui["status_field"])ui["status_field"].text=text;}
++  private function release():void{inputPacer.reset();motion.release(this);lastControl={left:false,right:false,jump:false};}
+   public function pause():void{if(!enabled)return;release();running=false;paused=true;pauseMessage="Robot: pausado pela tecla; reative para reiniciar";status(pauseMessage);}
+-  private function reset(now:int):void{cheeseConfirmed=false;cheeseWaitUntil=-1;release();running=false;attempted=false;paused=false;failure="";won=false;entering=false;holeWaitUntil=0;sequence=null;index=0;hasSample=false;synchronized=false;timing.reset(now);restUntil=0;lastState=null;waitingSpawn=false;restartPending=false;suspendedAt=-1;retryAt=0;settle=now+250;}
++  private function reset(now:int):void{commandState=null;feedback.reset();release();running=false;attempted=false;paused=false;failure="";won=false;entering=false;sequence=null;index=0;lastState=null;restartPending=false;}
+   public function setFocused(value:Boolean):void{focused=value;if(!value)release();}
+-  public function setTiming(policy:RouteTiming):void{timing=policy ? policy : new RouteTiming(1,false);}
+-  private function hasMovement(route:Array):Boolean{for each(var step:Array in route){if(step[1]=="hole")return false;if(step[1]=="walk")return true;}return false;}
++  public function setTiming(policy:RouteTiming):void{} // compatibility: no random pauses or coordinate offsets
+   private static function integer(value:*,minimum:Number,maximum:Number):Boolean{return value is Number && isFinite(Number(value)) && Number(value)==Math.floor(Number(value)) && Number(value)>=minimum && Number(value)<=maximum;}
+   public static function decodeRoute(text:String):Array{return validate(com.adobe.serialization.json.JSON.decode(text) as Array);}
+   public static function validate(route:Array):Array{
+@@ -74,26 +73,12 @@
+    var c:int=bytes.readUnsignedByte();var cc:int=bytes.readUnsignedByte();
+    if(c==5 && cc==2){restartPending=true;return;}
+    var k:Object=root["Keys"];var local:Object=k && root["tfm"] ? root["tfm"][k.player] : null;
+-   if(c==144 && cc==6 && bytes.bytesAvailable>=4){var cheeseId:int=bytes.readInt();if(local && k.player_id && cheeseId==int(local[k.player_id]))cheeseConfirmed=true;return;}
+    if(c==144 && cc==2){bytes.readUTF();if(bytes.bytesAvailable>=4 && local && k.player_id && int(local[k.player_id])==bytes.readInt())restartPending=true;return;}
+    if(!attempted || (!running && !entering) || c!=8 || cc!=6 || bytes.bytesAvailable<5)return;
+    bytes.readUnsignedByte();var id:int=bytes.readInt();
+-   if(local && k.player_id && k.player_id in local && int(local[k.player_id])==id){won=true;entering=true;running=false;restUntil=0;release();}
++   if(local && k.player_id && k.player_id in local && int(local[k.player_id])==id){won=true;entering=true;running=false;release();}
+   }
+-  private function waitForSpawn(text:String):Boolean{waitingSpawn=true;restUntil=0;release();status("Robot: aguardando renascer para ressincronizar | "+text+" | "+code);return false;}
+-  private function nativeRest():Boolean{
+-   try{var k:Object=root["Keys"];if(!k.is_jumping || !(k.is_jumping in player) || !(player[k.is_jumping] is Boolean) || player[k.is_jumping])return false;
+-    var getter:Function=k.get_linear_velocity && k.get_linear_velocity in body ? body[k.get_linear_velocity] as Function : null;
+-    var velocity:Object=getter!=null ? getter.apply(body,[]) : body[k.physics_state];
+-    return velocity && k.physics_state_vy in velocity && isFinite(Number(velocity[k.physics_state_vy])) && Math.abs(Number(velocity[k.physics_state_vy]))<=0.02;
+-   }catch(error:Error){return false;}
+-  }
+-  private function canMicroRest(next:Array):Boolean{
+-   if(!lastState || !next || next[1]!="walk" || Number(next[2])<80 || !nativeRest())return false;
+-   var p:Object=lastState;var q:Object=decodeMovement(next[0]);if(mirror){q.x=width-q.x;var right:Boolean=q.mr;q.mr=q.ml;q.ml=right;}
+-   return !p.jump && !q.jump && p.vy==0 && q.vy==0 && p.mr!=p.ml && q.mr==p.mr && q.ml==p.ml && Math.abs(p.y-q.y)<=0.5 && Math.abs(Number(player.x)-p.x)<=4 && Math.abs(Number(player.y)-p.y)<=1;
+-  }
+-  public function advance(now:int):void{try{update(now);}catch(error:Error){release();if(error.errorID==2601 || error.errorID==2602 || error.errorID==2603){running=false;paused=true;pauseMessage="Robot: pausado | "+error.message+" | "+code;status(pauseMessage);return;}if(error.errorID==2408){retryAt=now+500;status("Robot: aguardando sincronizacao nativa #2408");return;}if(error.errorID==2403){retryAt=now+500;due+=500;status("Robot: fisica bloqueada; aguardando proximo quadro");return;}running=false;attempted=true;failure="Robot: erro #"+error.errorID+"; reative para tentar novamente";status(failure);}}
++  public function advance(now:int):void{try{update(now);}catch(error:Error){release();if(error.errorID==2601){running=false;paused=true;pauseMessage="Robot: pausado | "+error.message+" | "+code;status(pauseMessage);return;}running=false;attempted=true;failure="Robot: erro #"+error.errorID+"; reative para tentar novamente";status(failure);}}
+   private function update(now:int):void{
+    var oldUi:Object=root["Interface"];var preview:DisplayObject=oldUi ? oldUi["preview_button"] as DisplayObject : null;
+    if(preview){preview.visible=false;if(preview is InteractiveObject)InteractiveObject(preview).mouseEnabled=false;}
+@@ -102,7 +87,7 @@
+    if(!active){cancelLoad();release();running=false;enabled=false;attempted=false;paused=false;failure="";status("Robot: desligado");return;}
+    var k:Object=root["Keys"];var game:Object=root["tfm"];if(!k || !game){status("Robot: aguardando jogo");return;}
+    if(!enabled){failedCode="";loadError="";enabled=true;if(!managed)FollowControllerV13Shared.stopForRobot(root);reset(now);}
+-   for each(var symbol:String in ["bot_map_code_object","bot_map_code_value","bot_reverse","bot_map_width","player_physics","bot_set_position","b2vec2"]){if(!k[symbol]){release();status("Robot: simbolo ausente: "+symbol);return;}}
++   for each(var symbol:String in ["bot_map_code_object","bot_map_code_value","bot_reverse","bot_map_width","player_physics"]){if(!k[symbol]){release();status("Robot: simbolo ausente: "+symbol);return;}}
+    var nextMap:Object=k.map_class ? k.map_class[k.map_instance] : null;var nextPlayer:Object=game[k.player];var nextBody:Object=nextPlayer ? nextPlayer[k.player_physics] : null;
+    if(!nextMap || !nextPlayer){if(entering && nextMap===map){release();status(won ? "Robot: vitoria confirmada; aguardando renascer" : "Robot: aguardando confirmacao da toca");return;}reset(now);map=null;player=null;body=null;aliveBefore=false;status("Robot: aguardando mapa/jogador");return;}
+    var numberObject:Object=nextMap[k.bot_map_code_object];var number:Number=numberObject ? Number(numberObject[k.bot_map_code_value]) : NaN;
+@@ -111,48 +96,43 @@
+    var token:String="current_round_code" in root ? String(root["current_round_code"]) : "";
+    if(restartPending || token!=roundToken || nextMap!==map || nextCode!=code || (alive && (!aliveBefore || nextPlayer!==player || nextBody!==body)))reset(now);
+    roundToken=token;map=nextMap;player=nextPlayer;body=nextBody;code=nextCode;aliveBefore=alive;root["current_map_code"]=code;root["current_map_code_int"]=int(number);
+-   if(entering){release();running=false;if(won)status("Robot: vitoria confirmada; aguardando proxima rodada");else if(now>holeWaitUntil)status("Robot: toca nao confirmada; reative para tentar novamente");else status("Robot: aguardando confirmacao nativa da toca");return;}
++   if(entering){release();running=false;if(won)status("Robot: vitoria confirmada; aguardando proxima rodada");else status("Robot: aguardando confirmacao nativa da toca");return;}
+    if(motion.finished()){release();running=false;status("Robot: toca confirmada; aguardando renascer");return;}
+    if(!alive){release();running=false;attempted=false;status("Robot: aguardando renascer | "+code);return;}
+-   if(waitingSpawn){release();return;}
+    if(!focused || root.stage.focus is TextField && TextField(root.stage.focus).type=="input"){
+-    if(suspendedAt<0){suspendedAt=now;release();}status("Robot: aguardando foco/edicao de texto");return;
++    if(running){pause();pauseMessage="Robot: foco perdido; reative para uma nova tentativa";status(pauseMessage);}else{release();status("Robot: aguardando foco/edicao de texto");}return;
+    }
+-   if(suspendedAt>=0){var suspended:int=Math.max(0,now-suspendedAt);due+=suspended;if(restUntil>0){restAt+=suspended;restUntil+=suspended;}suspendedAt=-1;if(lastState && restUntil==0)motion.movement(this,lastState.ml,lastState.mr,lastState.jump);}
+    if(paused){status(pauseMessage);return;}
+    if(failure!=""){status(failure);return;}
+    width=Number(k.map_class[k.bot_map_width]);if(!isFinite(width)||width<1||width>100000)throw new Error("Invalid map width",2504);
+    mirror=!worldSpace && Boolean(map[k.obj_container][k.bot_reverse]);
+-   if(now<settle || !k.move_class || !k.move_class[k.move_free] || (k.timer_class && k.timer_class[k.timer_prop])){
++   if(!k.move_class || !k.move_class[k.move_free] || (k.timer_class && k.timer_class[k.timer_prop])){
+     if(running)reset(now);status("Robot: aguardando liberacao da rodada | "+code);return;
+    }
+-   if(now<retryAt)return;
+    if(!routes){status("Robot: "+(loadError!="" ? loadError : "carregando rotas_decodificadas.json"));return;}
+    if(!attempted){
+     var saved:Object=routes[code];if(!saved){if(remote){requestRoute(code);status("Robot: "+(loadError!="" ? loadError : "carregando rota "+code));}else status("Robot: sem rota para "+code);return;}
+-    sequence=saved is String ? decodeRoute(String(saved)) : validate(saved as Array);if(!synchronized && hasMovement(sequence)){motion.synchronizeCurrent();if(game[k.player]!==player || k.map_class[k.map_instance]!==map || player[k.is_dead] || !player[k.player_clip] || !player[k.player_physics])throw new Error("Lifecycle changed during sync",2408);body=player[k.player_physics];synchronized=true;}index=0;attempted=true;running=true;due=now+Number(sequence[0][2]);
++    sequence=saved is String ? decodeRoute(String(saved)) : validate(saved as Array);index=0;attempted=true;running=true;
++
+    }
+    if(!running){status("Robot: rota finalizada | "+code+" | aguardando proximo mapa");return;}
+-   if(restUntil>0){
+-    if(now<restUntil && nativeRest()){status("Robot: microparada "+(restUntil-now)+" ms | "+code);return;}
+-    var held:Number=Math.max(0,now-restAt);due+=held;restUntil=0;
+-    if(lastState)motion.movement(this,lastState.ml,lastState.mr,lastState.jump);
+-   }
+-   var count:int=0;var walks:int=0;
+-   while(running && now>=due && count<256){
+-    var step:Array=sequence[index];if(String(step[1])=="walk"){if(walks>=1)break;walks++;}
+-    if(now-due>500 && cheeseWaitUntil<0)throw new Error("Janela atrasada; reinicie a rota",2603);
+-    if(!apply(step,k,now))return;index++;count++;
++   feedback.observe(player,body,k,now,lastControl);
++   var count:int=0;
++   while(running && count<256){
++    var step:Array=sequence[index];
++    if(!apply(step,k,now)){drive(now);return;}
++    index++;count++;
+     if(entering)break;
+     if(index>=sequence.length){running=false;release();break;}
+-    due+=Number(sequence[index][2]);
+-    if(step[1]=="walk"){
+-     var rest:int=timing.restDelay(now,canMicroRest(sequence[index]));
+-     if(rest>0){restAt=now;restUntil=now+rest;motion.movement(this,false,false,false);status("Robot: microparada "+rest+" ms | "+code);return;}
+-    }
+    }
++   if(running && !entering)drive(now);
+    if(entering){status("Robot: aguardando confirmacao nativa da toca");return;}
+    status(running ? "Robot: executando "+code+" | "+index+"/"+sequence.length : "Robot: rota finalizada | "+code);
++  }
++  private function drive(now:int):void{
++   if(!commandState)return;
++   var control:Object=feedback.controls(commandState,lastState);
++   if(inputPacer.allow(control,now)){motion.movement(this,control.left,control.right,control.jump);lastControl=control;}
+   }
+   public static function decodeMovement(p:Object):Object{
+    // ByteArray conversion deliberately matches Statements.step from the loader:
+@@ -165,22 +145,23 @@
+    if(action=="walk"){
+     var p:Object=decodeMovement(step[0]);
+     if(mirror){p.x=width-p.x;p.vx=-p.vx;var oldRight:Boolean=p.mr;p.mr=p.ml;p.ml=oldRight;}
+-    var dx:Number=p.x-Number(player.x);var dy:Number=p.y-Number(player.y);var error:Number=Math.sqrt(dx*dx+dy*dy);
+-    if(!isFinite(error))throw new Error("Posicao local indisponivel",2601);
+-    if(!hasSample && error>96)return waitForSpawn("inicio da rota distante "+Math.round(error)+"px");
+-    // Horizontal microadjustment while moving; no random sleeps or extra packets.
+-    var eligible:Boolean=!p.jump && p.vy==0 && p.mr!=p.ml && p.vx!=0;
+-    p.x+=timing.coordinateX(eligible);
+-    motion.followSample(this,p.ml,p.mr,p.jump,p.x,p.y);lastState=p;hasSample=true;
++    // Spatial mode: select the target as soon as the preceding target is visited.
++    // The stored delay never schedules or blocks native input.
++    if(!commandState || commandState.ml!=p.ml || commandState.mr!=p.mr || commandState.jump!=p.jump)feedback.changeInputs();
++    commandState=p;
++    var since:Number=feedback.since();
++    if(!feedback.checkpoint(p,since,lastState)){
++     var observed:Object=feedback.state();
++     status("Robot: ponto "+(index+1)+"/"+sequence.length+" | dx "+Math.round(p.x-observed.x)+" dy "+Math.round(p.y-observed.y)+" | "+observed.phase+" | v "+feedback.source);
++     return false;
++    }
++    feedback.crossedAt(feedback.hitAt);lastState=p;
++    // Commit the sampled input only after the corresponding position is visited.
++    // The final command is coalesced in drive(); dense samples cannot emit a burst.
+    }else if(action=="crouch" || action=="duck")motion.crouch(this,Number(step[0])!=0);
+-   else if(action=="cheese"){
+-    if(managed){
+-     var actual:Boolean=cheeseConfirmed || (k.player_cheese && Boolean(player[k.player_cheese]));
+-     if(!actual){if(cheeseWaitUntil<0){cheeseWaitStarted=now;cheeseWaitUntil=now+1500;}if(now>=cheeseWaitUntil)throw new Error("Queijo nao confirmado",2604);status("Robot: aguardando queijo nativo");return false;}
+-     if(cheeseWaitUntil>=0){due+=Math.max(0,now-cheeseWaitStarted);cheeseWaitUntil=-1;}
+-    }
+-   }
+-   else if(action=="hole"){entering=true;running=false;holeWaitUntil=now+3000;release();}
++   // Cheese remains a passive marker; the native game collects it.
++   else if(action=="cheese"){}
++   else if(action=="hole"){entering=true;running=false;release();}
+    return true;
+   }
+  }
+--- a/fontes-robot/VerifyRobot.java
++++ b/fontes-robot/VerifyRobot.java
+@@ -13,12 +13,15 @@
+    for(var t:traits)if(t instanceof com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter){String n=a.constants.getString(a.constants.getMultiname(t.name_index).name_index);if(cls.equals("disney.RoutePlayer")||retired.contains(n)){int mi=((com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter)t).method_info;if(!Arrays.equals(a.findBody(mi).getCodeBytes(),b.findBody(mi).getCodeBytes()))expected.add(mi);byte[] bytes=b.findBody(mi).getCodeBytes();if(!Arrays.equals(bytes,new byte[]{0x47})&&!Arrays.equals(bytes,new byte[]{0x20,0x48}))throw new Exception("Legacy method not inert: "+cls+"."+n);inert++;}}
+   }
+   if(inert!=23 || !changed.equals(expected))throw new Exception("Unexpected changes: "+changed);
+-  if(b.instance_info.size()!=a.instance_info.size()+15||b.findClassByName("disney.FollowControllerV13Shared")<0)throw new Exception("Class count mismatch");
++  if(b.instance_info.size()!=a.instance_info.size()+18||b.findClassByName("disney.FollowControllerV13Shared")<0)throw new Exception("Class count mismatch");
+   boolean packetHook=false;for(var t:b.instance_info.get(main).instance_traits.traits)if(t instanceof com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter && "handle_packet".equals(b.constants.getString(b.constants.getMultiname(t.name_index).name_index))){var code=b.findBody(((com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter)t).method_info).getCode().code;int[] expectedOps={0x60,0xd0,0xd1,0x46,0x12,0x47};for(int i=0;i<6;i++)if(code.get(i).definition.instructionCode!=expectedOps[i])throw new Exception("AutoBest packet gate malformed");if(!"FollowAutoBest".equals(b.constants.getString(b.constants.getMultiname(code.get(0).operands[0]).name_index)) || !"receive".equals(b.constants.getString(b.constants.getMultiname(code.get(3).operands[0]).name_index)) || code.get(3).operands[1]!=2 || code.get(4).operands[0]!=1)throw new Exception("AutoBest profile-only packet gate changed");packetHook=true;}if(!packetHook)throw new Exception("Missing AutoBest packet gate");
+   int driver=b.findClassByName("disney.NativeMotion");boolean shared=false;
+-  for(var t:b.instance_info.get(driver).instance_traits.traits)if(t instanceof com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter){String n=b.constants.getString(b.constants.getMultiname(t.name_index).name_index);if(n.equals("replay"))throw new Exception("Obsolete velocity replay still present");if(n.equals("followSample")){var code=b.findBody(((com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter)t).method_info).getCode();var calls=new ArrayList<String>();for(var op:code.code)if(op.definition.instructionCode==0x4f)calls.add(b.constants.getString(b.constants.getMultiname(op.operands[0]).name_index)+":"+op.operands[1]);if(!calls.equals(List.of("movement:4","place:3")))throw new Exception("Shared Follow path changed: "+calls);shared=true;}}
++  for(var t:b.instance_info.get(driver).instance_traits.traits)if(t instanceof com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter){String n=b.constants.getString(b.constants.getMultiname(t.name_index).name_index);if(n.equals("replay"))throw new Exception("Obsolete velocity replay still present");if(n.equals("followSample")){var code=b.findBody(((com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter)t).method_info).getCode();var calls=new ArrayList<String>();for(var op:code.code)if(op.definition.instructionCode==0x4f)calls.add(b.constants.getString(b.constants.getMultiname(op.operands[0]).name_index)+":"+op.operands[1]);if(!calls.equals(List.of("movement:4")))throw new Exception("Shared Follow path changed: "+calls);shared=true;}}
+   if(!shared)throw new Exception("Shared Follow driver missing");
+-  for(String[] target:new String[][]{{"disney.FollowControllerV13Shared","update"},{"disney.RoutePlayerNative","apply"}}){boolean hooked=false;int ci=b.findClassByName(target[0]);for(var t:b.instance_info.get(ci).instance_traits.traits)if(t instanceof com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter && target[1].equals(b.constants.getString(b.constants.getMultiname(t.name_index).name_index))){var body=b.findBody(((com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter)t).method_info);for(var op:body.getCode().code)if(op.definition.instructionCode==0x4f && "followSample".equals(b.constants.getString(b.constants.getMultiname(op.operands[0]).name_index)))hooked=true;}if(!hooked)throw new Exception("Follow/Robot not connected to shared driver: "+Arrays.toString(target));}
++  for(String[] target:new String[][]{{"disney.FollowControllerV13Shared","update"}}){boolean hooked=false;int ci=b.findClassByName(target[0]);for(var t:b.instance_info.get(ci).instance_traits.traits)if(t instanceof com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter && target[1].equals(b.constants.getString(b.constants.getMultiname(t.name_index).name_index))){var body=b.findBody(((com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter)t).method_info);for(var op:body.getCode().code)if(op.definition.instructionCode==0x4f && "followSample".equals(b.constants.getString(b.constants.getMultiname(op.operands[0]).name_index)))hooked=true;}if(!hooked)throw new Exception("Follow/Robot not connected to shared driver: "+Arrays.toString(target));}
++  int robot=b.findClassByName("disney.RoutePlayerNative");boolean keysOnly=false;
++  for(var t:b.instance_info.get(robot).instance_traits.traits)if(t instanceof com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter){String name=b.constants.getString(b.constants.getMultiname(t.name_index).name_index);var body=b.findBody(((com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter)t).method_info);for(var op:body.getCode().code)if(op.definition.instructionCode==0x4f || op.definition.instructionCode==0x46){String call=b.constants.getString(b.constants.getMultiname(op.operands[0]).name_index);if(List.of("place","followSample","synchronizeCurrent","setPosition","setLinearVelocity").contains(call))throw new Exception("Robot physical writer remains: "+name+" -> "+call);if(call.equals("movement"))keysOnly=true;}}
++  if(!keysOnly || b.findClassByName("disney.RouteFeedback")<0)throw new Exception("Robot native input feedback missing");
+   int rp=b.findClassByName("disney.RoutePlayerNative");for(var t:b.instance_info.get(rp).instance_traits.traits)if("followFrame".equals(b.constants.getString(b.constants.getMultiname(t.name_index).name_index)))throw new Exception("Interpolation function remains");
+   Set<String> flags=Set.of("no_delay","insta_death","insta_death2","insta_win");
+   for(var t:b.instance_info.get(main).instance_traits.traits)if(t instanceof com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter){String n=b.constants.getString(b.constants.getMultiname(t.name_index).name_index);if(!Set.of("loop_game","handle_packet").contains(n))continue;var body=b.findBody(((com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter)t).method_info);for(int i=0;i<body.getCode().code.size();i++){var op=body.getCode().code.get(i);if(op.definition.instructionCode==0x66){String p=b.constants.getString(b.constants.getMultiname(op.operands[0]).name_index);if(p!=null&&flags.contains(p))throw new Exception("Legacy flag still read: "+p);if("play_map".equals(p)&&i+1<body.getCode().code.size()){var next=body.getCode().code.get(i+1);if(next.definition.instructionCode==0x4f&&"addEventListener".equals(b.constants.getString(b.constants.getMultiname(next.operands[0]).name_index)))throw new Exception("Old playback listener still registered");}}}}
+--- a/fontes-robot/build.py
++++ b/fontes-robot/build.py
+@@ -1,4 +1,4 @@
+-"""Rebuild production SWF + two test fixtures with Java 21 and FFDec 26.4.0."""
++"""Rebuild production SWF and eight test fixtures with Java 21 and FFDec 26.4.0."""
+ import argparse,os,pathlib,shutil,subprocess,tempfile
+ HERE=pathlib.Path(__file__).resolve().parent
+ ROOT=HERE.parent
+@@ -20,6 +20,7 @@
+     text=(ROOT/'fontes-autoplay/RoutePlayer.as').read_text()
+     text=text.replace('class RoutePlayer','class RoutePlayerNative').replace('new RoutePlayer(', 'new RoutePlayerNative(').replace('var r:RoutePlayer=', 'var r:RoutePlayerNative=').replace('function RoutePlayer(', 'function RoutePlayerNative(')
+     (HERE/'RoutePlayerNative.as').write_text(text)
++    shutil.copyfile(ROOT/'fontes-conexao/ConnectionDiagnostics.as',HERE/'ConnectionDiagnostics.as')
+     shutil.copyfile(ROOT/'fontes-visual/AstroVisual.as',HERE/'AstroVisual.as')
+     shutil.copyfile(ROOT/'fontes-fly/FlyController.as',HERE/'FlyController.as')
+     shutil.copyfile(ROOT/'fontes-followautobest/FollowAutoBest.as',HERE/'FollowAutoBest.as')
+@@ -41,6 +42,7 @@
+         java(builder,compiled,ROOT/'fontes-followautobest/AutoBestTests.as',args.fixtures/'AutoBestTests.swf')
+         java(builder,compiled,ROOT/'fontes-interface/InterfaceTests.as',args.fixtures/'InterfaceTests.swf')
+         java(builder,compiled,ROOT/'fontes-interface/MusicTests.as',args.fixtures/'MusicTests.swf')
++        java(builder,compiled,ROOT/'fontes-conexao/ConnectionLogTests.as',args.fixtures/'ConnectionLogTests.swf')
+         args.output.parent.mkdir(parents=True,exist_ok=True)
+         shutil.copyfile(compiled,args.output)
+     print('Production SWF and fixtures built. Run run_tests.cjs separately.')
+--- a/fontes-robot/run_tests.cjs
++++ b/fontes-robot/run_tests.cjs
+@@ -6,16 +6,24 @@
+ if(!ruffle)throw new Error('Set RUFFLE_DIR to the extracted @ruffle-rs/ruffle directory.');
+ const library=path.join(root,'DisneyClient/public/rotas_decodificadas.json');
+ const fixtures=process.env.FIXTURES_DIR||path.join(__dirname,'fixtures');
++const diagnosticEvents=[];
+ const server=http.createServer((req,res)=>{
+  const route=new URL(req.url,'http://localhost').pathname;
++ if(route==='/client_diagnostics'){
++  const address=new URL(req.url,'http://localhost');
++  if(address.searchParams.get('access_token')!=='TEST'||address.searchParams.get('flash_token')!=='FLASH'){res.writeHead(401).end();return;}
++  const chunks=[];req.on('data',part=>chunks.push(part));req.on('end',()=>{diagnosticEvents.push(Object.fromEntries(new URLSearchParams(Buffer.concat(chunks).toString())));res.setHeader('Content-Type','application/json');res.end(JSON.stringify({saved:true}));});return;
++ }
++ if(route==='/diagnostics-fixture'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify(diagnosticEvents));return;}
++
+  if(route==='/'){
+-  res.setHeader('Content-Type','text/html');res.end(`<body><script>window.recordTest=x=>window.result=x;window.routeRequests=()=>performance.getEntriesByType('resource').filter(x=>x.name.includes('/public/rotas/')&&x.name.endsWith('.json')).length;window.recordProgress=x=>console.log(x);window.RufflePlayer={config:{autoplay:'on',unmuteOverlay:'hidden'}};</script><script src="/ruffle/ruffle.js"></script><script>addEventListener('load',()=>{const player=RufflePlayer.newest().createPlayer();document.body.append(player);player.ruffle().load({url:new URLSearchParams(location.search).get('case')==='music'?'/MusicTests.swf':new URLSearchParams(location.search).get('case')==='interface'?'/InterfaceTests.swf':new URLSearchParams(location.search).get('case')==='best'?'/AutoBestTests.swf':new URLSearchParams(location.search).get('case')==='fly'?'/FlyTests.swf':new URLSearchParams(location.search).get('case')==='visual'?'/VisualTests.swf':new URLSearchParams(location.search).get('case')==='follow'?'/FollowRegression.swf':'/RobotTests.swf',allowScriptAccess:true});});</script>`);return;
++  res.setHeader('Content-Type','text/html');res.end(`<body><script>window.recordTest=x=>window.result=x;window.routeRequests=()=>performance.getEntriesByType('resource').filter(x=>x.name.includes('/public/rotas/')&&x.name.endsWith('.json')).length;window.recordProgress=x=>console.log(x);window.RufflePlayer={config:{autoplay:'on',unmuteOverlay:'hidden'}};</script><script src="/ruffle/ruffle.js"></script><script>addEventListener('load',()=>{const player=RufflePlayer.newest().createPlayer();document.body.append(player);player.ruffle().load({url:new URLSearchParams(location.search).get('case')==='connection'?'/ConnectionLogTests.swf':new URLSearchParams(location.search).get('case')==='music'?'/MusicTests.swf':new URLSearchParams(location.search).get('case')==='interface'?'/InterfaceTests.swf':new URLSearchParams(location.search).get('case')==='best'?'/AutoBestTests.swf':new URLSearchParams(location.search).get('case')==='fly'?'/FlyTests.swf':new URLSearchParams(location.search).get('case')==='visual'?'/VisualTests.swf':new URLSearchParams(location.search).get('case')==='follow'?'/FollowRegression.swf':'/RobotTests.swf',allowScriptAccess:true});});</script>`);return;
+  }
+  if(route==='/music'||route.startsWith('/music/audio/')){if(!process.env.MUSIC_API_BASE){res.writeHead(503).end();return;}const upstream=http.request(new URL(req.url,process.env.MUSIC_API_BASE),{method:req.method,headers:req.headers},response=>{res.writeHead(response.statusCode,response.headers);response.pipe(res);});upstream.on('error',()=>{res.writeHead(502).end();});req.pipe(upstream);return;}
+  let file;
+  if(route==='/public/rotas_decodificadas.json')file=library;
+  else if(/^\/public\/rotas\/[0-9]+\.json$/.test(route))file=path.join(root,'DisneyClient',route);
+- else if(route==='/RobotTests.swf'||route==='/FollowRegression.swf'||route==='/VisualTests.swf'||route==='/FlyTests.swf'||route==='/AutoBestTests.swf'||route==='/InterfaceTests.swf'||route==='/MusicTests.swf')file=path.join(fixtures,path.basename(route));
++ else if(route==='/RobotTests.swf'||route==='/FollowRegression.swf'||route==='/VisualTests.swf'||route==='/FlyTests.swf'||route==='/AutoBestTests.swf'||route==='/InterfaceTests.swf'||route==='/MusicTests.swf'||route==='/ConnectionLogTests.swf')file=path.join(fixtures,path.basename(route));
+  else if(route.startsWith('/ruffle/')){
+   const base=path.resolve(ruffle);file=path.resolve(base,route.slice('/ruffle/'.length));
+   if(!file.startsWith(base+path.sep)){res.writeHead(403).end();return;}
+@@ -28,7 +36,7 @@
+  try{
+   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+   browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',headless:true,args:['--no-sandbox','--disable-dev-shm-usage','--autoplay-policy=no-user-gesture-required']});
+-  for(const target of (process.env.TEST_CASE ? [process.env.TEST_CASE] : ['robot','follow','visual','fly','best','interface',...(process.env.MUSIC_API_BASE?['music']:[])])){
++  for(const target of (process.env.TEST_CASE ? [process.env.TEST_CASE] : ['robot','follow','visual','fly','best','interface',...(process.env.MUSIC_API_BASE?['music']:[]),'connection'])){
+    const page=await browser.newPage();page.on('console',m=>{if(m.text().startsWith('Indexed')||m.text().startsWith('Validated'))console.log(m.text());});
+    await page.goto('http://127.0.0.1:'+server.address().port+'/?case='+target);
+    await page.waitForFunction(()=>window.result,null,{timeout:600000});
